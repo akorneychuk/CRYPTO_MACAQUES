@@ -10,7 +10,7 @@ matplotlib
 scikit-learn
 bottleneck
 pandas
-pandas-ta
+#pandas-ta
 plotly==5.15.0
 kaleido==0.2.1
 choreographer
