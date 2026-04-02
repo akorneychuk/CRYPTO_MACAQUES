@@ -1,9 +1,8 @@
 import multiprocessing
 from multiprocessing import Pool
 import os
-import time
 
-from SRC.CORE._CONSTANTS import _UTC_TIMESTAMP, DISCRETIZATION, _DISCRETIZATION
+from SRC.CORE._CONSTANTS import _UTC_TIMESTAMP, _DISCRETIZATION
 from SRC.CORE.debug_utils import SET_CONSOLE_LOGLEVEL
 from SRC.CORE.debug_utils import is_running_under_pycharm, SET_SYMBOL
 from SRC.LIBRARIES.new_data_utils import fetch_featurize_group_iterate

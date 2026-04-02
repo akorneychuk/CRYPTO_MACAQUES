@@ -582,63 +582,6 @@ def produce_mock_margin_isolated_binance_client_singleton():
 
         return filled_orders_count
 
-    def execute_oco_order_autotrading(self, place_oco_result):
-        datetime_price = _get_datetime_price()
-
-        filled_orders_count = 0
-        take_profit, stop_loss = self.get_oco_orders(self, place_oco_result)
-
-        if 'transaction_result' in place_oco_result :
-            filled_orders_count += 1
-            return filled_orders_count
-
-        if take_profit['status'] == 'FILLED' or stop_loss['status'] == 'FILLED':
-            return filled_orders_count
-
-        if place_oco_result['transaction_type'] == _LONG:
-            if datetime_price['price'] >= take_profit['price']:
-                take_profit['status'] = 'FILLED'
-                stop_loss['status'] = 'EXPIRED'
-                quantity = take_profit['quantity']
-
-                self.execute_oco_order(SIDE_SELL, quantity, take_profit['price'], place_oco_result, profit_or_loss=True)
-                filled_orders_count += 1
-
-                return filled_orders_count
-
-            if datetime_price['price'] <= stop_loss['stopLimitPrice']:
-                stop_loss['status'] = 'FILLED'
-                take_profit['status'] = 'EXPIRED'
-                quantity = stop_loss['quantity']
-
-                self.execute_oco_order(SIDE_SELL, quantity, stop_loss['stopLimitPrice'], place_oco_result, profit_or_loss=False)
-                filled_orders_count += 1
-
-                return filled_orders_count
-
-        if place_oco_result['transaction_type'] == _SHORT:
-            if datetime_price['price'] <= take_profit['price']:
-                take_profit['status'] = 'FILLED'
-                stop_loss['status'] = 'EXPIRED'
-                quantity = take_profit['quantity']
-
-                self.execute_oco_order(SIDE_BUY, quantity, take_profit['price'], place_oco_result, profit_or_loss=True)
-                filled_orders_count += 1
-
-                return filled_orders_count
-
-            if datetime_price['price'] >= stop_loss['stopLimitPrice']:
-                stop_loss['status'] = 'FILLED'
-                take_profit['status'] = 'EXPIRED'
-                quantity = stop_loss['quantity']
-
-                self.execute_oco_order(SIDE_BUY, quantity, stop_loss['stopLimitPrice'], place_oco_result, profit_or_loss=False)
-                filled_orders_count += 1
-
-                return filled_orders_count
-
-        return filled_orders_count
-
     def execute_oco_order(self, side, quantity, price, place_oco_result, profit_or_loss):
         try:
             market_order = [
@@ -755,7 +698,6 @@ def produce_mock_margin_isolated_binance_client_singleton():
     mock_client.create_margin_order.side_effect = log_mock_calls(MethodType(create_margin_order, mock_client), name='BINANCE MOCK', log_level='NOTICE')
     mock_client.create_margin_oco_order.side_effect = log_mock_calls(MethodType(create_margin_oco_order, mock_client), name='BINANCE MOCK', log_level='NOTICE')
     mock_client.execute_oco_order_backtesting.side_effect = log_mock_calls(MethodType(execute_oco_order_backtesting, mock_client), name='BINANCE MOCK', log_level='DEBUG')
-    mock_client.execute_oco_order_autotrading.side_effect = log_mock_calls(MethodType(execute_oco_order_autotrading, mock_client), name='BINANCE MOCK', log_level='DEBUG')
     mock_client.execute_oco_order.side_effect = log_mock_calls(MethodType(execute_oco_order, mock_client), name='BINANCE MOCK', log_level='NOTICE')
     mock_client.repay_margin_loan.side_effect = log_mock_calls(MethodType(repay_margin_loan, mock_client), name='BINANCE MOCK', log_level='DEBUG')
     mock_client.cancel_margin_order.side_effect = log_mock_calls(MethodType(cancel_margin_order, mock_client), name='BINANCE MOCK', log_level='NOTICE')
