@@ -400,7 +400,7 @@ ACTION_BUY = "BUY"
 ACTION_SELL = "SELL"
 ACTION_NO = "NO"
 
-KIEV_UTC_HOURS_DIFF = int(datetime.now(pytz.timezone("Europe/Kyiv")).utcoffset().total_seconds() / 3600 )
+KIEV_UTC_HOURS_DIFF = int(datetime.now(pytz.timezone("Europe/Kyiv")).utcoffset().total_seconds() / 3600)
 
 KIEV_TZ = pytz.timezone(f'Etc/GMT-{KIEV_UTC_HOURS_DIFF}')
 UTC_TZ = pytz.timezone('Etc/GMT')
