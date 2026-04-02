@@ -20,7 +20,7 @@ from binance.client import Client as BinanceClient
 from binance.enums import SIDE_BUY, ORDER_TYPE_MARKET, SIDE_SELL, FUTURE_ORDER_TYPE_MARKET
 from dateutil import parser
 from SRC.LIBRARIES.new_utils import is_close_or_lower, is_close_or_higher
-from SRC.CORE._CONSTANTS import _SYMBOL_JOIN, BINANCE_API_KEY, BINANCE_API_SECRET, EXCHANGE_MP_INFO_FILE_PATH, EXCHANGE_INFO_FILE_PATH, SYMBOLS_INFO_FILE_PATH, MARGIN_ACCOUNT_INFO_FILE_PATH, _DISCRETIZATION, \
+from SRC.CORE._CONSTANTS import _SYMBOL_JOIN, EXCHANGE_MP_INFO_FILE_PATH, EXCHANGE_INFO_FILE_PATH, SYMBOLS_INFO_FILE_PATH, MARGIN_ACCOUNT_INFO_FILE_PATH, _DISCRETIZATION, \
     _SYMBOL_MARGIN_LOAN_WATCHER_FILE_PATH, EXCHANGE_INFO_FUTURES_FILE_PATH, USE_PROXY_CLIENT, project_root_dir, _IS_BINANCE_PROD, _LONG
 from SRC.CORE._CONSTANTS import _KIEV_TIMESTAMP, LEVERAGE
 from SRC.CORE._CONSTANTS import _SYMBOL_TRADINGVIEW_RECOMMENDATION_DF_FILE_PATH
@@ -107,162 +107,9 @@ def produce_exit_market_order_params(algo_order):
     return exit_market_order_params
 
 
-def _futures_create_algo_order(algo_order_s, **params):
-    from SRC.LIBRARIES.redis_utils import get_next_id
-
-    assert params['type'] in [FUTURE_ORDER_TYPE_TAKE_PROFIT_MARKET, FUTURE_ORDER_TYPE_STOP_MARKET], f'WRONG FUTURES ALGO ORDER TYPE [params: {str(params)}]'
-
-    client_alog_id = params['clientAlgoId']
-    symbol = params['symbol']
-    quantity = float(params['quantity'])
-    type = params['type']
-    side = params['side']
-    position_side = params['positionSide']
-    trigger_price = float(params['triggerPrice'])
-
-    algo_status = "NEW"
-    price = '0'
-
-    algo_order = {
-        'algoId': get_next_id('futures_order_id'),
-        'algoStatus': algo_status,
-        'clientAlgoId': client_alog_id,
-        'symbol': symbol,
-        'orderType': type,
-        'side': side,
-        'positionSide': position_side,
-        'quantity': str(quantity),
-        'triggerPrice': str(trigger_price),
-        'price': price,
-        'updateTime': time.time() * 1000,
-        'triggerTime': 0,
-        'goodTillDate': 0
-    }
-
-    algo_order_s.append(algo_order)
-
-    return algo_order
-
-
-def _futures_get_algo_order(algo_order_s, **params):
-    algo_order_ = [order for order in algo_order_s if order['algoId'] == params['algoId']]
-    if len(algo_order_) > 0:
-        return algo_order_[0]
-
-    return None
-
-
-def _futures_get_open_algo_orders(algo_order_s, **params):
-    opened_order_s = [order for order in algo_order_s if order['algoStatus'] == 'NEW']
-
-    return opened_order_s
-
-
-def _futures_get_all_algo_orders(algo_order_s, **params):
-    return algo_order_s
-
-
-def _futures_cancel_algo_order(algo_order_s, **params):
-    for algo_order in algo_order_s:
-        if algo_order['algoId'] == params['algoId']:
-            algo_order['algoStatus'] = "CANCELED"
-            algo_order["updateTime"] = time.time() * 1000
-
-
-def _futures_cancel_all_algo_open_orders(algo_order_s, **params):
-    for algo_order in algo_order_s:
-        algo_order['algoStatus'] = "CANCELED"
-        algo_order["updateTime"] = time.time() * 1000
-
-
-def start_algo_orders_executor(client, symbol):
-    from SRC.WEBAPP.TESTS.test_futures_dashboard_trades_executor import _take_profit, _stop_loss
-
-    def run_order_executor():
-        logger_func = NOTICE_SPLITTED if is_autotrading() else CONSOLE_SPLITTED
-
-        counter = 0
-        while True:
-            price = tryall_delegate(lambda: get_futures_symbol_ticker_current_price(symbol), tryalls_count=3, label=f"TRY GET FUTURES SYMBOL CURRENT PRICE")
-            grouped_algo_order_d = tryall_delegate(lambda: get_futures_opened_transaction_grouped_algo_order_d(client, symbol), tryalls_count=3, label=f"TRY GET TRANSACTIONS ALGO ORDERS")
-            grouped_new_algo_order_d = {transaction_id: orders_d for transaction_id, orders_d in grouped_algo_order_d.items() if _take_profit in orders_d and orders_d[_take_profit]['algoStatus'] == 'NEW' and _stop_loss in orders_d and orders_d[_stop_loss]['algoStatus'] == 'NEW'}
-
-            if counter % 3 == 0:
-                positions = tryall_delegate(lambda: client.futures_position_information(symbol=symbol), tryalls_count=3, label=f"TRY GET FUTURES POSITIONS")
-                logger_func(*[
-                    f"ORDER EXECUTOR: {symbol} | {_float_5(price)}",
-                    *[f"POSITION [{pos['positionSide']}] QTY: {_float_5(pos['positionAmt'])}" for pos in positions],
-                    *[f"TRANSACTION [{orders_d['position_side']}|{transaction_id}] QTY: {orders_d['quantity']} | LOSS PRICE: {orders_d[_stop_loss]['triggerPrice']} | PROFIT PRICE: {orders_d[_take_profit]['triggerPrice']}" for transaction_id, orders_d in grouped_new_algo_order_d.items()]
-                ])
-
-            for transaction_id, orders_d in grouped_new_algo_order_d.items():
-                if FUTURE_ORDER_TYPE_TAKE_PROFIT_MARKET not in orders_d:
-                    continue
-
-                if FUTURE_ORDER_TYPE_STOP_MARKET not in orders_d:
-                    continue
-
-                take_profit_order = orders_d[FUTURE_ORDER_TYPE_TAKE_PROFIT_MARKET]
-                stop_loss_order = orders_d[FUTURE_ORDER_TYPE_STOP_MARKET]
-
-                if take_profit_order['algoStatus'] != 'NEW' or stop_loss_order['algoStatus'] != 'NEW':
-                    continue
-
-                if take_profit_order['positionSide'] == _LONG:
-                    if is_close_or_higher(float(price), float(take_profit_order['triggerPrice'])):
-                        exit_market_order_params = produce_exit_market_order_params(take_profit_order)
-                        order = tryall_delegate(lambda: client.futures_create_order(**exit_market_order_params), tryalls_count=3, label=f"TRY CREATE EXIT PROFIT MARKET ORDER BY ALGO ORDER")
-                        take_profit_order['actualOrderId'] = order['orderId']
-                        take_profit_order['algoStatus'] = 'FINISHED'
-                        take_profit_order['updateTime'] = time.time() * 1000
-
-                    if is_close_or_lower(float(price), float(stop_loss_order['triggerPrice'])):
-                        exit_market_order_params = produce_exit_market_order_params(stop_loss_order)
-                        order = tryall_delegate(lambda: client.futures_create_order(**exit_market_order_params), tryalls_count=3, label=f"TRY CREATE EXIT LOSS MARKET ORDER BY ALGO ORDER")
-                        stop_loss_order['actualOrderId'] = order['orderId']
-                        stop_loss_order['algoStatus'] = 'FINISHED'
-                        stop_loss_order['updateTime'] = time.time() * 1000
-                else:
-                    if is_close_or_lower(float(price), float(take_profit_order['triggerPrice'])):
-                        exit_market_order_params = produce_exit_market_order_params(take_profit_order)
-                        order = tryall_delegate(lambda: client.futures_create_order(**exit_market_order_params), tryalls_count=3, label=f"TRY CREATE EXIT PROFIT MARKET ORDER BY ALGO ORDER")
-                        take_profit_order['actualOrderId'] = order['orderId']
-                        take_profit_order['algoStatus'] = 'FINISHED'
-                        take_profit_order['updateTime'] = time.time() * 1000
-
-                    if is_close_or_higher(float(price), float(stop_loss_order['triggerPrice'])):
-                        exit_market_order_params = produce_exit_market_order_params(stop_loss_order)
-                        order = tryall_delegate(lambda: client.futures_create_order(**exit_market_order_params), tryalls_count=3, label=f"TRY CREATE EXIT LOSS MARKET ORDER BY ALGO ORDER")
-                        stop_loss_order['actualOrderId'] = order['orderId']
-                        stop_loss_order['algoStatus'] = 'FINISHED'
-                        stop_loss_order['updateTime'] = time.time() * 1000
-
-            time.sleep(5)
-            counter += 1
-
-    thread = threading.Thread(target=run_order_executor, daemon=True)
-    thread.start()
-
-
 class MyBinanceClient(BinanceClient):
-    def __init__(self, api_key, api_secret):
-        if USE_PROXY_CLIENT():
-            CONSOLE_SPLITTED("BINANCE PROXY")
-
-            from SRC.LIBRARIES.BinanceProxyClient import BinanceProxyClient as BinanceClient
-            cert_path = str(project_root_dir() / "charles_cert.pem")
-
-            requests_params = {
-                "proxies": {
-                    "http": "http://127.0.0.1:8888",
-                    "https": "http://127.0.0.1:8888"
-                },
-                "verify": cert_path
-            }
-
-            super().__init__(api_key, api_secret, requests_params)
-        else:
-            super().__init__(api_key, api_secret)
+    def __init__(self, api_key=None, api_secret=None):
+        super().__init__(api_key, api_secret)
 
         self.client = super()
 
@@ -339,52 +186,10 @@ class MyBinanceClient(BinanceClient):
         self.universal_transfer(type='MARGIN_MAIN', asset=asset, amount=amount, fromSymbol=fromSymbol)
 
 
-class EmulateAlgoMyBinanceClient(MyBinanceClient):
-    def __init__(self, api_key, api_secret):
-        super().__init__(api_key, api_secret)
-
-        self.algo_order_s = []
-
-    ### ALGO ORDERS START
-    def futures_get_all_algo_orders(self, **params):
-        return _futures_get_all_algo_orders(self.algo_order_s, **params)
-
-    def futures_get_algo_order(self, **params):
-        return _futures_get_algo_order(self.algo_order_s, **params)
-
-    def futures_get_open_algo_orders(self, **params):
-        return _futures_get_open_algo_orders(self.algo_order_s, **params)
-
-    def futures_create_algo_order(self, **params):
-        return _futures_create_algo_order(self.algo_order_s, **params)
-
-    def futures_cancel_algo_order(self, **params):
-        return _futures_cancel_algo_order(self.algo_order_s, **params)
-
-    def futures_cancel_all_algo_open_orders(self, **params):
-        return _futures_cancel_all_algo_open_orders(self.algo_order_s,**params)
-
-
 def produce_binance_client():
-    if check_env_true('IS_EMULATE_ALGO_FLOW'):
-        client = EmulateAlgoMyBinanceClient(BINANCE_API_KEY, BINANCE_API_SECRET)
-    else:
-        client = MyBinanceClient(BINANCE_API_KEY, BINANCE_API_SECRET)
+    client = MyBinanceClient()
 
     return client
-
-
-async def async_produce_binance_async_client():
-    async_client = await AsyncClient.create(
-        api_key=BINANCE_API_KEY,
-        api_secret=BINANCE_API_SECRET,
-        session_params={
-            "connector": aiohttp.TCPConnector(limit=100)  # bump pool size
-        }
-    )
-
-    return async_client
-
 
 @lru_cache(maxsize=None)
 def produce_binance_client_singleton_cached():
@@ -586,6 +391,19 @@ def get_futures_symbol_ticker_current_price(symbol):
     current_price = float(client.futures_symbol_ticker(symbol=symbol)['price'])
 
     return current_price
+
+
+def get_margin_isolated_total_net_USDT(client, symbol, price):
+    coin_stable_asset = client.get_isolated_margin_account(symbols=symbol)['assets'][0]
+
+    quote_asset = coin_stable_asset['quoteAsset']
+    base_asset = coin_stable_asset['baseAsset']
+    total_net_USDT = (
+            float(quote_asset['netAsset']) +
+            float(base_asset['netAsset']) * price
+    )
+
+    return total_net_USDT
 
 
 def calculate_reduceonly_order_exit_position_metrics(entry_order, exit_reduceonly_order, grouped_trades):
