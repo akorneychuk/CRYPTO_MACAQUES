@@ -2,6 +2,10 @@ import time
 
 from SRC.CORE.debug_utils import produce_measure, is_running_under_pycharm
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from multiprocessing import Pool, Manager
+from IPython.display import DisplayHandle
+import time
+import threading
 
 
 def iterate_multithread_executor_safe(executor, _func, args, num_workers=1):
@@ -86,7 +90,7 @@ def iterate_multiprocess_pool_safe(_func, args, num_workers=1):
 
 
 def iterate_multiprocess_pool(_func, args, num_workers=1):
-    if num_workers > 1:
+    if num_workers > 1 and not is_running_under_pycharm():
         from multiprocessing import Pool
         try:
             with Pool(num_workers) as pool:
@@ -118,6 +122,70 @@ def test_job_func(arg):
     time.sleep(arg)
 
     return arg
+
+
+def test_worker_task(args):
+    worker_id, task_data, progress_queue = args
+
+    total_steps = 10
+    for step in range(total_steps):
+        time.sleep(0.2)  # simulate work
+
+        # report progress
+        progress_queue.put((worker_id, step + 1, total_steps))
+
+    return worker_id
+
+
+def progress_listener(progress_queue, displays, stop_event):
+    while not stop_event.is_set():
+        try:
+            worker_id, done, total = progress_queue.get(timeout=0.1)
+
+            width = 20
+            filled = int(width * done / total)
+            bar = "|" * filled + "-" * (width - filled)
+            percent = 100 * done / total
+
+            displays[worker_id].update(
+                f"Worker {worker_id}: [{bar}] {percent:.0f}%"
+            )
+
+        except:
+            continue
+
+
+def run_parallel(num_workers):
+    manager = Manager()
+    progress_queue = manager.Queue()
+
+    # create display handles (one per worker)
+    displays = {}
+    for i in range(num_workers):
+        d = DisplayHandle()
+        d.display(f"Worker {i}: starting...")
+        displays[i] = d
+
+    stop_event = threading.Event()
+
+    # start listener thread
+    listener = threading.Thread(
+        target=progress_listener,
+        args=(progress_queue, displays, stop_event),
+        daemon=True
+    )
+    listener.start()
+
+    # prepare args
+    tasks = [(i % num_workers, i, progress_queue) for i in range(20)]
+
+    with Pool(num_workers) as pool:
+        results = list(pool.map(test_worker_task, tasks))
+
+    stop_event.set()
+    listener.join()
+
+    return results
 
 
 if __name__ == "__main__":

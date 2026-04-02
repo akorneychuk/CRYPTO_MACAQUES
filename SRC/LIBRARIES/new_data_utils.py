@@ -1,5 +1,6 @@
 import itertools
 import math
+import random
 import multiprocessing
 import os
 import random
@@ -20,8 +21,12 @@ from IPython.core.display_functions import display
 from binance.enums import HistoricalKlinesType
 from dateutil import parser
 from filelock import FileLock
+from SRC.LIBRARIES.time_utils import round_up_to_nearest_step
 
-from SRC.CORE._CONSTANTS import _SYMBOL, _DISCRETIZATION, _FUTURES, _MARGIN, _BROKEN_DF_IDX_FILE_PATH, UTC_TZ, _UTC_TIMESTAMP, _CLOSE_GRAD, _CLOSE_GRAD_NEXT, USE_GPU, _FINE_TUNE_NET, _IGNORE
+import numpy as np
+import pandas as pd
+
+from SRC.CORE._CONSTANTS import _SYMBOL, _DISCRETIZATION, _FUTURES, _MARGIN, _BROKEN_DF_IDX_FILE_PATH, UTC_TZ, _UTC_TIMESTAMP, _CLOSE_GRAD, _CLOSE_GRAD_NEXT, USE_GPU, _FINE_TUNE_NET, _IGNORE, __PTP
 from SRC.CORE._CONSTANTS import PARTITIONING_MAP, _LONG, _SHORT, _SIGNAL, SIGNAL_IGNORE, SIGNAL_LONG_OUT, SIGNAL_SHORT_OUT, SIGNAL_SHORT_IN, SIGNAL_LONG_IN, CACHED_FILE_PATH, \
     MAX_FEATURE_NAN_START_COUNT, DISCRETIZATIONS_GROUP_FILE_PATH, _KIEV_TIMESTAMP, _TIMESTAMP, GROUP_SEGMENTS_MAX_LENGTH, _SYMBOL, KIEV_TZ, _REGIME, _DASHBOARD_SEGMENT_AUTOTRADING, _SHOULD_VALIDATE_GROUP_CONSTRAINTS, USE_PROXY_CLIENT, WEIGHTS_FILE_PATH, _DASHBOARD_SEGMENT, CONFIGS_FILE_PATH, _OPEN, \
     _HIGH, _LOW, _CLOSE, project_root_dir, WEIGHTS_DIFF_DIST_DATA_MAP_FILE_PATH, __SIGNAL, __INCLUDED, __DIST, __DIFF, __DIFF_CL, \
@@ -31,12 +36,12 @@ from SRC.CORE._CONSTANTS import TZ
 from SRC.CORE._CONSTANTS import UTC_TZ
 from SRC.CORE._CONSTANTS import _MARGIN, _BROKEN_DF_IDX_FILE_PATH, STAGE4_DATA_MAP_FILE_PATH
 from SRC.CORE._CONSTANTS import _UTC_TIMESTAMP, _DISCRETIZATION
-from SRC.CORE.debug_utils import printmd, format_memory, produce_measure, format_df_memory, produce_parent_process_delegate, printmd_HTML, SET_SYMBOL, is_running_under_pycharm
+from SRC.CORE.debug_utils import printmd, format_memory, produce_measure, format_df_memory, produce_parent_process_delegate, printmd_HTML, SET_SYMBOL, is_running_under_pycharm, is_running_under_pycharm_debugger
 from SRC.CORE.utils import calc_mean_rel_diff, calc_mean_abs_diff, calc_grad, write_json, read_json, datetime_h_m__d_m_y, pairwise, datetime_Y_m_d__h_m_s, read_json_safe, get_oh_clazz_map, get_one_hot_from_clazz, get_label_cl_map, hashabledict, hashablelist
 from SRC.CORE.utils import featurize_lambda
 from SRC.LIBRARIES.new_utils import print_populated_char_n_times, format_num, check_env_true, get_input_feature_col_s, get_threshold_col_s, find_first_list_item, remove_list_duplicates
 from SRC.LIBRARIES.new_utils import string_bool, run_multi_process, tryall_delegate, merge_dicts, calc_circle_segment, slice_list_start_end, func_multi_process, split_list_into_chunks
-from SRC.LIBRARIES.time_utils import TIME_DELTA, PARTITIONING, INTERVAL, INTERVAL_PARTITION, as_utc_tz, utc_now, as_kiev_tz
+from SRC.LIBRARIES.time_utils import TIME_DELTA, PARTITIONING, INTERVAL, INTERVAL_PARTITION, as_utc_tz, utc_now, as_kiev_tz, round_down_to_nearest_step
 
 try:
     from shapely.geometry import Polygon, Point
@@ -64,14 +69,30 @@ def run_fetch_cache(pair_s):
     return [pair for pair in pair_s if pair['symbol'] in unfinished_symbol_s]
 
 
-def fetch_with_retry(pair_s, max_retries=5, wait_secs=60):
+def run_fetch_featurize_cache(pair_s):
+    manager = multiprocessing.Manager()
+    unfinished_symbol_s = manager.list()
+
+    for pair in pair_s:
+        pair['unfinished_symbol_s'] = unfinished_symbol_s
+        pair['pairs_count'] = len(pair_s)
+
+    is_parralel_execution = len(pair_s) > 1
+    run_multi_process(fetch_featurize_cache_all_unwrap, pair_s, is_parralel_execution=is_parralel_execution, finished_title=f"FETCHED | FEATURIZED | CACHED", print_result_full=True)
+
+    printmd(f"**UNFINISHED SYMBOLS [FETCH | FEATURIZE | CACHE]:** \r\n{unfinished_symbol_s}")
+
+    return [pair for pair in pair_s if pair['symbol'] in unfinished_symbol_s]
+
+
+def execute_with_retry(pair_s, func, max_retries=5, wait_secs=60):
     """
-    Repeatedly fetch unfinished pairs until all succeed or retry limit is reached.
-    """
+        Repeatedly fetch unfinished pairs until all succeed or retry limit is reached.
+        """
     for attempt in range(1, max_retries + 1):
-        unfinished_pair_s = run_fetch_cache(pair_s)
+        unfinished_pair_s = func(pair_s)
         if not unfinished_pair_s:  # all done
-            print(f"✅ All pairs fetched successfully on attempt {attempt}.")
+            print(f"✅ All pairs processed successfully on attempt {attempt}.")
             return []
 
         print(f"⚠️ Attempt {attempt}: still unfinished {len(unfinished_pair_s)} pairs.")
@@ -83,6 +104,14 @@ def fetch_with_retry(pair_s, max_retries=5, wait_secs=60):
         else:
             print(f"❌ Max retries ({max_retries}) reached. Unfinished pairs remains:\r\n{unfinished_pair_s}")
             return unfinished_pair_s
+
+
+def fetch_cache_with_retry(pair_s, max_retries=5, wait_secs=60):
+    return execute_with_retry(pair_s, run_fetch_cache, max_retries=max_retries, wait_secs=wait_secs)
+
+
+def fetch_featurize_cache_with_retry(pair_s, max_retries=5, wait_secs=60):
+    return execute_with_retry(pair_s, run_fetch_featurize_cache, max_retries=max_retries, wait_secs=wait_secs)
 
 
 def fetch_cache_all_unwrap(pair):
@@ -99,7 +128,7 @@ def fetch_cache_all_unwrap(pair):
         time.sleep(random.randint(0, 20))
 
     try:
-        df_s = fetch_cache_all(market_type, symbol, discretization_s, start_dt, end_dt, print_out=False)
+        df_s = fetch_cache_all(market_type, symbol, discretization_s, start_dt, end_dt, print_out=True)
         df_highest_discr_start_dt = df_s[-1].iloc[0][_KIEV_TIMESTAMP]
         df_lowest_discr_end_dt = df_s[0].iloc[-1][_KIEV_TIMESTAMP]
 
@@ -113,8 +142,41 @@ def fetch_cache_all_unwrap(pair):
         print(f"####EXCEPTION#### {symbol}-{discretization_s} ####EXCEPTION####")
         print(ex)
         print(traceback.format_exc())
-        sys.stdout.flush()
         unfinished_symbol_s.append(symbol)
+
+        return None
+
+
+def fetch_featurize_cache_all_unwrap(pair):
+    market_type = pair['market_type'] if 'market_type' in pair else HistoricalKlinesType.SPOT
+    symbol = pair['symbol']
+    discretization_s = pair['discretization_s']
+    start_dt = pair['start_dt']
+    end_dt = pair['end_dt']
+    unfinished_symbol_s = pair['unfinished_symbol_s']
+    pairs_count = pair['pairs_count']
+
+    if pairs_count > 5 and not is_running_under_pycharm():
+        time.sleep(random.randint(10, 180))
+
+    try:
+        df_s = fetch_featurize_cache_all(market_type, symbol, discretization_s, start_dt, end_dt, print_out=False, should_retry=False)
+        df_highest_discr_start_dt = df_s[-1].iloc[0][_KIEV_TIMESTAMP]
+        df_lowest_discr_end_dt = df_s[0].iloc[-1][_KIEV_TIMESTAMP]
+
+        return [symbol, discretization_s, f"{datetime_Y_m_d__h_m_s(df_highest_discr_start_dt)} - {datetime_Y_m_d__h_m_s(df_lowest_discr_end_dt)}"]
+    except Exception as ex:
+        target_exception = ex.__cause__
+        if isinstance(target_exception, binance.exceptions.BinanceAPIException):
+            if target_exception.code == -1003:
+                return f"ERROR: {symbol}-{discretization_s} >> TOO MANY REQUESTS >> RETRY LATER"
+
+        print(f"####EXCEPTION#### {symbol}-{discretization_s} ####EXCEPTION####")
+        print(ex)
+        print(traceback.format_exc())
+
+        if 'TOO MANY REQUESTS' in str(ex):
+            unfinished_symbol_s.append(symbol)
 
         return None
 
@@ -336,6 +398,12 @@ def produce_supertrand_config():
                     'period': 10,
                     'multiplier': 3.0
                 }
+            ],
+            "4H": [
+                {
+                    'period': 10,
+                    'multiplier': 3.0
+                }
             ]
         }
     }
@@ -343,18 +411,42 @@ def produce_supertrand_config():
     return super_trand_config
 
 
-def fetch_featurize_group_all(market_type, symbol, discretization_s, segments, end_dt, print_out=False):
-    df_s = []
+def fetch_featurize_realtime_group_all(market_type, symbol, discretization_s, segments, print_out=False):
+    now_utc = UTC_TZ.localize(datetime.utcnow())
+    end_dt = round_down_to_nearest_step(now_utc, TIME_DELTA('5M')) + TIME_DELTA(discretization_s[0])
+
+    group = fetch_featurize_group_all(market_type, symbol, discretization_s, end_dt=end_dt, segments=segments, print_out=print_out)
+
+    return group
+
+
+def fetch_featurize_realtime_group_resampled_all(market_type, symbol, discretization_s, segments, print_out=False):
+    now_utc = UTC_TZ.localize(datetime.utcnow())
+    end_dt = round_down_to_nearest_step(now_utc, TIME_DELTA('5M')) + TIME_DELTA(discretization_s[0])
+
+    group = fetch_featurize_group_resampled_all(market_type, symbol, discretization_s, end_dt=end_dt, segments=segments, print_out=print_out)
+
+    return group
+
+
+def fetch_featurize_group_all(market_type, symbol, discretization_s, end_dt, segments, print_out=False):
+    df_ohlc_s = []
     for discretization in discretization_s:
         start_dt = end_dt - (TIME_DELTA(discretization) * (segments + MAX_FEATURE_NAN_START_COUNT() + 30))
 
-        df = fetch(market_type, symbol, discretization, start_dt, end_dt)
+        df = fetch(market_type, symbol, discretization, start_dt, end_dt, validate=False)
         df = df.iloc[:-1]
-        df_s.append(df)
+        df_ohlc_s.append(df)
+
+    if print_out:
+        print(f'FETCHED: {symbol} | {discretization_s} ')
 
     super_trand_config = produce_supertrand_config()
-    df_s = featurize_all(symbol, df_s, super_trand_config=super_trand_config, print_out=print_out)
-    df_dropna_tail_s = list(map(lambda df: df.dropna().tail(segments), df_s))
+    df_s = featurize_all(symbol, df_ohlc_s, super_trand_config=super_trand_config, print_out=print_out)
+
+    df_dropna_tail_s = [dropna_features(df).tail(segments) for df in df_s]
+
+    validate_timeseries_df_s(df_dropna_tail_s, _UTC_TIMESTAMP, print_out=print_out)
 
     if not all([len(df_dropna_tail) == segments for df_dropna_tail in df_dropna_tail_s]):
         raise RuntimeError(f"BROKEN SEGMENTS COUNT: {[len(df_dropna_tail) for df_dropna_tail in df_dropna_tail_s]}")
@@ -362,12 +454,60 @@ def fetch_featurize_group_all(market_type, symbol, discretization_s, segments, e
     return df_dropna_tail_s
 
 
-def fetch_featurize_all(market_type, symbol, discretization_s, start_dt: datetime=None, end_dt: datetime=None, print_out=True):
-    df_s = fetch_all(market_type, symbol, discretization_s, start_dt, end_dt, validate=True, print_out=print_out)
+def fetch_featurize_group_resampled_all(market_type, symbol, discretization_s, end_dt, segments, print_out=False):
+    segments_safe = segments + MAX_FEATURE_NAN_START_COUNT() + 30
+    highest_start_dt = end_dt - (TIME_DELTA(discretization_s[-1]) * segments_safe)
+
+    df_ohlc_s = []
+    df = fetch(market_type, symbol, '1M', highest_start_dt, end_dt, validate=False)
+    for discretization in discretization_s:
+        discretization_start_dt = end_dt - (TIME_DELTA(discretization) * segments_safe)
+        df_discr = df[df[_UTC_TIMESTAMP] >= discretization_start_dt]
+        df_ohlc = candelify_ohlc(df_discr, symbol, discretization, upper_reindex=True, shift_idx=False, shift_open_close=False, target_feature='price')
+
+        df_ohlc_s.append(df_ohlc)
+
+    if print_out:
+        print(f'FETCHED: {symbol} | {discretization_s} ')
+
+    super_trand_config = produce_supertrand_config()
+    df_s = featurize_all(symbol, df_ohlc_s, super_trand_config=super_trand_config, print_out=print_out)
+
+    df_dropna_tail_s = [dropna_features(df).tail(segments) for df in df_s]
+
+    validate_timeseries_df_s(df_dropna_tail_s, _UTC_TIMESTAMP, print_out=print_out)
+
+    if not all([len(df_dropna_tail) == segments for df_dropna_tail in df_dropna_tail_s]):
+        raise RuntimeError(f"BROKEN SEGMENTS COUNT: {[len(df_dropna_tail) for df_dropna_tail in df_dropna_tail_s]}")
+
+    return df_dropna_tail_s
+
+
+def fetch_featurize_all(market_type, symbol, discretization_s, start_dt: datetime=None, end_dt: datetime=None, print_out=False):
+    df_s = fetch_all(market_type, symbol, discretization_s, start_dt, end_dt, validate=False, print_out=print_out)
     super_trand_config = produce_supertrand_config()
     df_s = featurize_all(symbol, df_s, super_trand_config=super_trand_config)
+    df_s = [dropna_features(df) for df in df_s]
+
+    validate_timeseries_df_s(df_s, _UTC_TIMESTAMP, print_out=print_out)
 
     return df_s
+
+
+def fetch_featurize_group_iterate(market_type, symbol, segments, discretization_s, discretization_feature_s, start_dt=None, end_dt=None):
+    df_s = fetch_featurize_all(market_type, symbol, discretization_s, start_dt=start_dt, end_dt=end_dt, print_out=True)
+    assert__input_features_exists(df_s, discretization_feature_s)
+
+    group_df = read_group_df(discretization_s=hashablelist(discretization_s))
+    group_constraints_df = get_group_constraints_df(df_s=df_s, group_df=group_df, start_dt=start_dt, end_dt=end_dt)
+    if len(group_constraints_df) == 0:
+        ex = Exception(f"WRONG GROUP CONSTRAINTS | market_type = {market_type} | symbol = {symbol} | discretization_s = {discretization_s} | start_dt = {start_dt} | end_dt = {end_dt} | Empty DataFrame")
+
+        raise ex
+
+    for idx, row in group_constraints_df.iterrows():
+        group = get_group(row, segments, df_s)
+        yield group
 
 
 def fetch_signalize_cache_all(market_type, symbol, discretization_s, start_dt, end_dt):
@@ -394,6 +534,8 @@ def retrieve_zigzagize_cache_all(symbol, discretization_s, threshold_s, print_ou
 
     write_cache_df(df_s, print_out=print_out)
 
+    return df_s
+
 
 def fetch_cache_all(market_type, symbol, discretization_s, start_dt, end_dt, print_out=True):
     df_s = fetch_all(market_type, symbol, discretization_s, start_dt, end_dt, validate=False, print_out=print_out)
@@ -408,6 +550,34 @@ def retrieve_featurize_cache_all(symbol, discretization_s, print_out=True):
     df_s = featurize_all(symbol, df_s, print_out=print_out)
 
     write_cache_df(df_s)
+
+    return df_s
+
+
+def fetch_featurize_cache_all(market_type, symbol, discretization_s, start_dt: datetime=None, end_dt: datetime=None, print_out=True, should_retry=True):
+    df_s = []
+    for discretization in discretization_s:
+        df = fetch(market_type, symbol, discretization, start_dt, end_dt, validate=False, should_retry=should_retry)
+        df = featurize(df=df, super_trand_config=None)
+        df = dropna_features(df)
+
+        validate_timeseries_df(df, _UTC_TIMESTAMP, print_out=False)
+
+        df_s.append(df)
+
+    date_constraint_present = ""
+    if start_dt:
+        date_constraint_present += f"start_dt: {datetime_Y_m_d__h_m_s(start_dt)}"
+
+    if end_dt:
+        date_constraint_present += f"end_dt: {datetime_Y_m_d__h_m_s(end_dt)}"
+
+    write_cache_df(df_s, print_out=False)
+
+    if print_out:
+        print(f"FETCHED | FEATURIZED | VALIDATED | CACHED: {symbol} | {discretization_s} || [{date_constraint_present}")
+
+    return df_s
 
 
 def filter_features_all(symbol, df_s, input_features, threshold_s, print_out=True):
@@ -465,9 +635,26 @@ def fetch_all(market_type, symbol, discretization_s, start_dt: datetime=None, en
 
     if print_out:
         print(f'FETCHED: {symbol} | {discretization_s}')
-        sys.stdout.flush()
 
     return df_s
+
+
+def dropna_features(df, except_feature_s=['tpr_', 'signal_', '_diff_', '_DIFF_']):
+    symbol = df.iloc[0][_SYMBOL]
+    discretization = df.iloc[0][_DISCRETIZATION]
+
+    feature_s = df.columns.to_list()
+    max_feature_nan_start_count = MAX_FEATURE_NAN_START_COUNT()
+
+    ignore_drop_na_feature_s = [feature for feature in feature_s if not any(except_feature in feature for except_feature in except_feature_s)]
+    df_nan = df.copy()
+    df_nonan = df_nan.dropna(subset=ignore_drop_na_feature_s)
+
+    lenght_diff = len(df_nan) - len(df_nonan)
+    assert lenght_diff <= max_feature_nan_start_count, f"UNEXPECTED NANs DETECTED | MORE THAN [{max_feature_nan_start_count}]: {lenght_diff} | [{symbol} | {discretization} | {feature_s}]"
+    assert df_nonan.iloc[-1].name == df_nan.iloc[-1].name, "ERROR > UNEXPECTED [NANs] DETECTED"
+
+    return df_nonan
 
 
 def retrieve_all(symbol, discretization_s, start_dt: datetime=None, end_dt: datetime=None, in_out_features=None, drop_na=False, print_out=True):
@@ -480,19 +667,15 @@ def retrieve_all(symbol, discretization_s, start_dt: datetime=None, end_dt: date
             df = retrieve(symbol=symbol, discretization=discretization)
             if in_out_features is not None:
                 in_discr_features = list(in_out_features['input'][discretization])
-                feature_s = [*in_discr_features, *[in_out_features['output']]] if is_output_discretization else in_discr_features
+                meta_discr_features = list(in_out_features['meta'][discretization]) if in_out_features['meta'] and discretization in in_out_features['meta'] else []
+                out_features = list(in_out_features['output'])
+                feature_s = [*in_discr_features, *meta_discr_features, *out_features] if is_output_discretization else in_discr_features
                 feature_s = remove_list_duplicates([*[_SYMBOL, _DISCRETIZATION, _UTC_TIMESTAMP, _KIEV_TIMESTAMP], *feature_s])
 
                 assert all(col in df.columns for col in feature_s), f"NOT ALL FEATURES EXISTS: {feature_s}"
 
                 if drop_na:
-                    ignore_drop_na_feature_s = [feature for feature in feature_s if 'tpr_' not in feature and 'signal_' not in feature]
-                    df_nan = df.copy()
-                    df = df_nan.dropna(subset=ignore_drop_na_feature_s)
-
-                    lenght_diff = len(df_nan) - len(df)
-                    assert lenght_diff <= 51 , f"UNEXPECTED NANs DETECTED [{symbol} | {discretization} | {feature_s}] | MORE THAN [51]: {lenght_diff}"
-                    assert df.iloc[-1].name >= df_nan.iloc[-1].name , "ERROR > UNEXPECTED [NANs] DETECTED"
+                    df = dropna_features(df)
                 else:
                     df = df.dropna()
 
@@ -577,19 +760,8 @@ def featurize_all(symbol, discret_df_s, super_trand_config=None, print_out=True)
         for df in discret_df_s:
             discretization = df.iloc[0][_DISCRETIZATION]
             try:
-                df = featurize(df=df)
-                if super_trand_config is not None:
-                    super_trand_discretization_config = super_trand_config['default']
-                    if 'discretization_s' in super_trand_config and discretization in super_trand_config['discretization_s']:
-                        super_trand_discretization_config_s = super_trand_config['discretization_s'][discretization]
-                        for super_trand_discretization_config in super_trand_discretization_config_s:
-                            period = super_trand_discretization_config['period']
-                            multiplier = super_trand_discretization_config['multiplier']
-                            df = featurize_supertrend(df, period=period, multiplier=multiplier)
-                    else:
-                        period = super_trand_discretization_config['period']
-                        multiplier = super_trand_discretization_config['multiplier']
-                        df = featurize_supertrend(df, period=period, multiplier=multiplier)
+                df = featurize(df=df, super_trand_config=super_trand_config)
+
                 featurized_df_s.append(df)
             except Exception as ex:
                 print(f"!!! FAILED FEATURIZE !!!: {symbol} | {discretization} | {str(ex)}")
@@ -602,12 +774,10 @@ def featurize_all(symbol, discret_df_s, super_trand_config=None, print_out=True)
 
         if print_out:
             print(f"FEATURIZED: {symbol} | {[df.iloc[0][_DISCRETIZATION] for df in discret_df_s]}")
-            sys.stdout.flush()
 
         return featurized_df_s
     except Exception as ex:
         print(f"!!! FAILED FEATURIZE !!!: {symbol} | {str(ex)}")
-        sys.stdout.flush()
         raise
 
 
@@ -632,15 +802,22 @@ def fetch_featurize_all_unwrap(args):
         return f"ERROR [{symbol}|{market_type}|{discretization_s}]: {str(ex)}"
 
 
-def fetch_featurize(market_type, symbol_s, discretization_s, start_dt, num_workers=5):
+def fetch_featurize_all_s(market_type, symbol_s, discretization_s, start_dt, num_workers=5):
     args = [{
         'symbol': symbol,
         'market_type': market_type,
         'discretization_s': discretization_s,
         'start_dt': start_dt
     } for symbol in symbol_s]
-    with multiprocessing.Pool(processes=num_workers) as pool:
-        results = pool.map(fetch_featurize_all_unwrap, args)
+
+    if len(symbol_s) > 1:
+        with multiprocessing.Pool(processes=num_workers) as pool:
+            results = pool.map(fetch_featurize_all_unwrap, args)
+    else:
+        results = []
+        for arg in args:
+            result = fetch_featurize_all_unwrap(arg)
+            results.append(result)
 
     df_s = []
     for res in results:
@@ -685,13 +862,139 @@ def retrieve(symbol, discretization):
     return df
 
 
-def featurize(df):
+def imacd(df, **kwargs):
+    try:
+        import pandas_ta as pta
+
+        _sma = lambda series, window: pta.sma(series, length=window)
+        _ema = lambda series, window: pta.ema(series, length=window)
+    except:
+        import ta
+
+        _sma = lambda series, window: ta.trend.sma_indicator(series, window=window, fillna=True)
+        _ema = lambda series, window: ta.trend.ema_indicator(series, window=window, fillna=True)
+
+    data = df
+    open_col = kwargs.pop("open", "open")
+    high_col = kwargs.pop("high", "high")
+    low_col = kwargs.pop("low", "low")
+    close_col = kwargs.pop("close", "close")
+
+    lengthMA: int = 26  # input(34)
+    lengthSignal: int = 9  # input(9)
+
+    def calc_smma(src: np.ndarray, length: int) -> np.ndarray:
+        """
+        Calculate Smoothed Moving Average (SMMA) for a given numpy array `src` with a specified `length`.
+        """
+        smma = np.full_like(src, fill_value=np.nan)
+        sma = _sma(pd.Series(src), length)
+
+        for i in range(1, len(src)):
+            smma[i] = (
+                sma[i]
+                if np.isnan(smma[i - 1])
+                else (smma[i - 1] * (length - 1) + src[i]) / length
+            )
+
+        return smma
+
+    def calc_zlema(src: np.ndarray, length: int) -> np.ndarray:
+        """
+        Calculates the zero-lag exponential moving average (ZLEMA) of the given price series.
+        """
+        ema1 = _ema(pd.Series(src), length)
+        ema2 = _ema(pd.Series(ema1), length)
+        d = ema1 - ema2
+
+        return ema1 + d
+
+    src = (data[high_col].to_numpy(dtype=np.double) + data[low_col].to_numpy(dtype=np.double) + data[close_col].to_numpy(dtype=np.double)) / 3
+    hi = calc_smma(data[high_col].to_numpy(dtype=np.double), lengthMA)
+    lo = calc_smma(data[low_col].to_numpy(dtype=np.double), lengthMA)
+    mi = calc_zlema(src, lengthMA)
+
+    md = np.full_like(mi, fill_value=np.nan)
+
+    conditions = [mi > hi, mi < lo]
+    choices = [mi - hi, mi - lo]
+
+    md = np.select(conditions, choices, default=0)
+
+    sb = _sma(pd.Series(md), lengthSignal)
+    sh = md - sb
+
+    df['iMACD'] = md
+    df['iMACDh'] = sh.to_list()
+    df['iMACDs'] = sb.to_list()
+
+    return df
+
+
+def featurize_pandasta(df, open_col, high_col, low_col, close_col, close_scaled_col):
     import pandas_ta as ta  # <-- important, this registers the `.ta` accessor
+    import ta
+
+    df.ta.sma(append=True, close=close_col, length=6)
+    df.ta.sma(append=True, close=close_col, length=12)
+    df.ta.sma(append=True, close=close_col, length=24)
+
+    df.ta.rsi(append=True, close=close_scaled_col, length=14)
+
+    # df.ta.atr(14, append=True, mamode="rma", close=close_col)
+    df["ATRr_14"] = ta.volatility.average_true_range(df[high_col], df[low_col], df[close_col], window=14, fillna=False)
+
+    # df.ta.macd(append=True, close=close_col, fast=12, slow=26, signal=9)
+    macd_indicator = ta.trend.MACD(df["close"], window_fast=12, window_slow=26, window_sign=9)
+    df["MACD_12_26_9"] = macd_indicator.macd()
+    df["MACDh_12_26_9"] = macd_indicator.macd_diff()
+    df["MACDs_12_26_9"] = macd_indicator.macd_signal()
+
+    df = imacd(df, high=high_col, low=low_col, close=close_col)
+
+    return df
+
+
+def featurize_simpleta(df, open_col, high_col, low_col, close_col, close_scaled_col):
+    import ta
+
+    df["SMA_6"] = ta.trend.sma_indicator(df[close_col], window=6)
+    df["SMA_12"] = ta.trend.sma_indicator(df[close_col], window=12)
+    df["SMA_24"] = ta.trend.sma_indicator(df[close_col], window=24)
+
+    df["RSI_14"] = ta.momentum.rsi(df[close_scaled_col], window=14)
+    df["ATRr_14"] = ta.volatility.average_true_range(df[high_col], df[low_col], df[close_col], window=14, fillna=False)
+
+    macd_indicator = ta.trend.MACD(df["close"], window_fast=12, window_slow=26, window_sign=9)
+    df["MACD_12_26_9"] = macd_indicator.macd()
+    df["MACDh_12_26_9"] = macd_indicator.macd_diff()
+    df["MACDs_12_26_9"] = macd_indicator.macd_signal()
+
+    df = imacd(df, high=high_col, low=low_col, close=close_col)
+
+    return df
+
+
+try:
+    # import pandas_ta as ta  # <-- important, this registers the `.ta` accessor
+    # featurize_ta = featurize_pandasta
+
+    featurize_ta = featurize_simpleta
+except Exception as ex:
+    import ta
+
+    featurize_ta = featurize_simpleta
+    print(f"NO PANDAS TA >> USE TA PACKAGE: {str(ex)}")
+
+
+def featurize(df, super_trand_config=None):
+    df = df.copy()
 
     open_col = 'open'
     high_col = 'high'
     low_col = 'low'
     close_col = 'close'
+    close_scaled_col = 'close_scaled'
 
     discretization = df.iloc[0][_DISCRETIZATION]
 
@@ -699,20 +1002,13 @@ def featurize(df):
     order_of_magnitude = int(math.floor(math.log10(abs(close_mean))))
     if order_of_magnitude < 1:
         order_of_multiply = math.pow(10, abs(order_of_magnitude))
-        df['close_scaled'] = df[close_col] * order_of_multiply
+        df[close_scaled_col] = df[close_col] * order_of_multiply
     else:
-        df['close_scaled'] = df[close_col]
+        df[close_scaled_col] = df[close_col]
 
-    df.ta.sma(append=True, close=close_col, length=24)
-    df.ta.sma(append=True, close=close_col, length=12)
-    df.ta.sma(append=True, close=close_col, length=6)
+    df = featurize_ta(df, open_col, high_col, low_col, close_col, close_scaled_col)
 
-    df.ta.rsi(append=True, close='close_scaled')
-    df.ta.macd(append=True, close=close_col)
-    df.ta.atr(14, append=True, close=close_col)
-    df = imacd(df, high=high_col, low=low_col, close=close_col)
-
-    del df['close_scaled']
+    del df[close_scaled_col]
 
     volume_grad_config = [
         {'feature': 'volume', 'window': 1},
@@ -771,15 +1067,123 @@ def featurize(df):
 
     df = featurize_gradient(df, discretization, atr_grad_config)
 
+    if super_trand_config is not None:
+        super_trand_discretization_config = super_trand_config['default']
+        if 'discretization_s' in super_trand_config and discretization in super_trand_config['discretization_s']:
+            super_trand_discretization_config_s = super_trand_config['discretization_s'][discretization]
+            for super_trand_discretization_config in super_trand_discretization_config_s:
+                period = super_trand_discretization_config['period']
+                multiplier = super_trand_discretization_config['multiplier']
+                df = featurize_supertrend(df, period=period, multiplier=multiplier)
+        else:
+            period = super_trand_discretization_config['period']
+            multiplier = super_trand_discretization_config['multiplier']
+            df = featurize_supertrend(df, period=period, multiplier=multiplier)
+
     return df
+
+
+def compare_ta_implementations(
+        df,
+        open_col="open",
+        high_col="high",
+        low_col="low",
+        close_col="close",
+        close_scaled_col="close_scaled",
+        atol=1e-8
+):
+    df1 = df.copy()
+    df2 = df.copy()
+
+    df1 = featurize_pandasta(df1, open_col, high_col, low_col, close_col, close_scaled_col)
+    df2 = featurize_simpleta(df2, open_col, high_col, low_col, close_col, close_scaled_col)
+
+    cols1 = set(df1.columns)
+    cols2 = set(df2.columns)
+
+    print("==== COLUMN CHECK ====")
+
+    only1 = cols1 - cols2
+    only2 = cols2 - cols1
+
+    if only1:
+        print("Columns only in pandas_ta:", sorted(only1))
+    if only2:
+        print("Columns only in ta:", sorted(only2))
+    if not only1 and not only2:
+        print("Column sets match")
+
+    common_cols = sorted(cols1 & cols2)
+
+    print("\n==== VALUE CHECK ====")
+
+    mismatches = []
+
+    for col in common_cols:
+        s1 = df1[col]
+        s2 = df2[col]
+
+        if pd.api.types.is_numeric_dtype(s1) and pd.api.types.is_numeric_dtype(s2):
+            equal = np.allclose(
+                s1.fillna(0).values,
+                s2.fillna(0).values,
+                atol=atol
+            )
+
+            if not equal:
+                diff = np.nanmax(np.abs(s1 - s2))
+                mismatches.append((col, diff))
+
+    if mismatches:
+        print("Columns with value differences:")
+        for col, diff in mismatches:
+            print(f"{col}  max diff = {diff}")
+    else:
+        print("All numeric columns match within tolerance")
+
+    return df1, df2
+
+
+def TEST__COMPARE_TA_IMPLS():
+    n, seed = 500, 42
+
+    np.random.seed(seed)
+
+    price = np.cumsum(np.random.normal(0, 1, n)) + 100
+
+    df = pd.DataFrame({
+        "open": price + np.random.normal(0, 0.5, n),
+        "high": price + np.random.uniform(0, 1, n),
+        "low": price - np.random.uniform(0, 1, n),
+        "close": price + np.random.normal(0, 0.5, n),
+    })
+
+    df["close_scaled"] = (df["close"] - df["close"].mean()) / df["close"].std()
+
+    df1, df2 = compare_ta_implementations(
+        df,
+        open_col="open",
+        high_col="high",
+        low_col="low",
+        close_col="close",
+        close_scaled_col="close_scaled"
+    )
 
 
 def featurize_supertrend(df, period=10, multiplier=3.0):
     import pandas as pd
-    import pandas_ta as ta
 
     hl2 = (df['high'] + df['low']) / 2
-    atr = df.ta.atr(length=period, mamode='rma')
+
+    try:
+        # import pandas_ta as ta
+        # atr = df.ta.atr(length=period, mamode='rma')
+
+        import ta
+        atr = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=period, fillna=True)
+    except:
+        import ta
+        atr = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=period, fillna=True)
 
     upperband = hl2 + (multiplier * atr)
     lowerband = hl2 - (multiplier * atr)
@@ -820,19 +1224,24 @@ def featurize_supertrend(df, period=10, multiplier=3.0):
     return df
 
 
-def fetch_dirty(market_type, symbol, discretization, start_dt: datetime=None, end_dt: datetime=None):
+def fecth_klines_retry(market_type, symbol, discretization, start_dt: datetime=None, end_dt: datetime=None, should_retry=True):
     from SRC.LIBRARIES.binance_helpers import produce_binance_client_singleton
 
-    market_type = _market_type_binance(market_type)
+    market_type_binance = _market_type_binance(market_type)
 
-    start_dt_str = start_dt and start_dt.strftime("%d %b %Y %H:%M:%S")
-    end_dt_str = end_dt and end_dt.strftime("%d %b %Y %H:%M:%S")
+    start_dt_str = start_dt and start_dt.strftime("%d %b %Y %H:%M:%S") if isinstance(start_dt, datetime) else start_dt
+    end_dt_str = end_dt and end_dt.strftime("%d %b %Y %H:%M:%S") if isinstance(end_dt, datetime) else end_dt
 
-    tryalls_count = 5
-
+    tryalls_count = 5 if should_retry else 1
     binance_client = produce_binance_client_singleton()
 
-    klines = tryall_delegate(lambda: binance_client.get_historical_klines(symbol, discretization.lower(), start_dt_str, end_dt_str, klines_type=market_type), label=f"get_historical_klines > {market_type} | {symbol} || {discretization}", tryalls_count=tryalls_count)
+    klines = tryall_delegate(lambda: binance_client.get_historical_klines(symbol, discretization.lower(), start_dt_str, end_dt_str, klines_type=market_type_binance), label=f"get_historical_klines > {market_type} | {symbol} || {discretization}", tryalls_count=tryalls_count)
+
+    return klines
+
+
+def fetch_dirty(market_type, symbol, discretization, start_dt: datetime=None, end_dt: datetime=None, should_retry=True):
+    klines = fecth_klines_retry(market_type, symbol, discretization, start_dt=start_dt, end_dt=end_dt, should_retry=should_retry)
 
     df = pd.DataFrame(klines, columns=['open_time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_av', 'trades', 'tb_base_av', 'tb_quote_av', 'ignore'])
     df['open_time'] = pd.to_numeric(df['open_time'], errors='coerce')
@@ -869,12 +1278,12 @@ def fetch_dirty(market_type, symbol, discretization, start_dt: datetime=None, en
 
 
 @lru_cache(maxsize=None)
-def fetch_cached(market_type, symbol, discretization, start_dt: datetime=None, end_dt: datetime=None, validate=True):
-    return fetch(market_type, symbol, discretization, start_dt=start_dt, end_dt=end_dt, validate=validate)
+def fetch_cached(market_type, symbol, discretization, start_dt: datetime=None, end_dt: datetime=None, validate=True, should_retry=True):
+    return fetch(market_type, symbol, discretization, start_dt=start_dt, end_dt=end_dt, validate=validate, should_retry=should_retry)
 
 
-def fetch(market_type, symbol, discretization, start_dt: datetime=None, end_dt: datetime=None, validate=True):
-    df = fetch_dirty(market_type, symbol, discretization, start_dt, end_dt)
+def fetch(market_type, symbol, discretization, start_dt: datetime=None, end_dt: datetime=None, validate=True, should_retry=True):
+    df = fetch_dirty(market_type, symbol, discretization, start_dt, end_dt, should_retry=should_retry)
 
     start_timedelta = pd.Timedelta(microseconds=0)
     end_timedelta = pd.Timedelta(df.index.max() - df.index.min())
@@ -1198,66 +1607,6 @@ def featurize_gradient(df, discretization, grad_feature_config_s):
     return df
 
 
-def imacd(df, **kwargs):
-    import pandas_ta as pta
-
-    data = df
-    open_col = kwargs.pop("open", "open")
-    high_col = kwargs.pop("high", "high")
-    low_col = kwargs.pop("low", "low")
-    close_col = kwargs.pop("close", "close")
-
-    lengthMA: int = 26  # input(34)
-    lengthSignal: int = 9  # input(9)
-
-    def calc_smma(src: np.ndarray, length: int) -> np.ndarray:
-        """
-        Calculate Smoothed Moving Average (SMMA) for a given numpy array `src` with a specified `length`.
-        """
-        smma = np.full_like(src, fill_value=np.nan)
-        sma = pta.sma(pd.Series(src), length)
-
-        for i in range(1, len(src)):
-            smma[i] = (
-                sma[i]
-                if np.isnan(smma[i - 1])
-                else (smma[i - 1] * (length - 1) + src[i]) / length
-            )
-
-        return smma
-
-    def calc_zlema(src: np.ndarray, length: int) -> np.ndarray:
-        """
-        Calculates the zero-lag exponential moving average (ZLEMA) of the given price series.
-        """
-        ema1 = pta.ema(pd.Series(src), length)
-        ema2 = pta.ema(pd.Series(ema1), length)
-        d = ema1 - ema2
-
-        return ema1 + d
-
-    src = (data[high_col].to_numpy(dtype=np.double) + data[low_col].to_numpy(dtype=np.double) + data[close_col].to_numpy(dtype=np.double)) / 3
-    hi = calc_smma(data[high_col].to_numpy(dtype=np.double), lengthMA)
-    lo = calc_smma(data[low_col].to_numpy(dtype=np.double), lengthMA)
-    mi = calc_zlema(src, lengthMA)
-
-    md = np.full_like(mi, fill_value=np.nan)
-
-    conditions = [mi > hi, mi < lo]
-    choices = [mi - hi, mi - lo]
-
-    md = np.select(conditions, choices, default=0)
-
-    sb = pta.sma(pd.Series(md), lengthSignal)
-    sh = md - sb
-
-    df['iMACD'] = md
-    df['iMACDh'] = sh.to_list()
-    df['iMACDs'] = sb.to_list()
-
-    return df
-
-
 def calculate_diff(df, feature, window):
     # PREPARE
     x = list(range(len(df.index.to_list())))
@@ -1326,7 +1675,8 @@ def cache_df(arg):
         not_threshold_col_s = [col for col in df_stored.columns if f'{threshold}' not in col]
 
         try:
-            if all([stored_col for stored_col in df_stored.columns if stored_col in threshold_col_s]):
+            contain_s = [stored_col for stored_col in df_stored.columns if stored_col in threshold_col_s]
+            if len(contain_s) > 0 and all(contain_s):
                 return f"ALREADY HAS FEATURES: {threshold_col_s}"
 
             df_fresh[not_threshold_col_s] = df_stored[not_threshold_col_s]
@@ -1476,11 +1826,11 @@ def read_group_df(discretization_s):
     should_validate = True if _SHOULD_VALIDATE_GROUP_CONSTRAINTS not in os.environ else string_bool(os.environ[_SHOULD_VALIDATE_GROUP_CONSTRAINTS])
     if should_validate:
         for feature in [feature for feature in group_df.columns if any([key in feature for key in ['start', 'end', 'out']])]:
-            validate_group_constraints_df(group_df, feature, times=1 if out_discretization == feature.split("_")[0] else 2)
+            times = 1 if out_discretization == feature.split("_")[0] else 2
+            validate_group_constraints_df(group_df, feature, times=times, print_out=False)
 
         group_constraints = list(OrderedDict.fromkeys([col.split("_")[0] for col in list(group_df.columns)[1:]]))
         print(f"VALIDATED: GROUP | {group_constraints}")
-        sys.stdout.flush()
 
     return group_df
 
@@ -1503,10 +1853,16 @@ def get_group(row, segments, df_s):
 
 
 def get_group_constraints_df(df_s, group_df, start_dt=None, end_dt=None):
-    highest_discretization = df_s[-1].iloc[0][_DISCRETIZATION]
+    highest_df = df_s[-1]
+    highest_discretization = highest_df.iloc[0][_DISCRETIZATION]
     out_discretization = df_s[0].iloc[0][_DISCRETIZATION]
     out_less_then = min([df[_UTC_TIMESTAMP].max() for df in df_s])
     start_highest_more_then = max([df[_UTC_TIMESTAMP].min() for df in df_s])
+    highest_discretization_window_td = group_df.iloc[0][f'{highest_discretization}_end'] - group_df.iloc[0][f'{highest_discretization}_start']
+    highest_discretization_window_segments_count = highest_discretization_window_td / TIME_DELTA(highest_discretization)
+
+    assert len(highest_df) > highest_discretization_window_segments_count, f'{highest_discretization} DF ROWS COUNT SHOULD BE MORE THAN: {highest_discretization_window_segments_count} [GROUP DF {highest_discretization} SEGMENTS OFFSET]'
+
     filtered_group_df = group_df[group_df[f'{highest_discretization}_start'] >= start_highest_more_then][group_df[f'{out_discretization}_out'] <= out_less_then]
 
     if start_dt is not None:
@@ -1832,20 +2188,32 @@ def validate_inputs_outputs_df(pair_s):
     printmd(f"**END {execution_type}FEATURES VALIDATION || SYMBOLS NEED UPDATE:** \r\n\r\n{unfinished_symbol_s}")
 
 
-def validate_group_constraints_df(df, feature, times=1):
+def validate_group_constraints_df(df, feature, times=1, print_out=True):
     df[feature] = pd.to_datetime(df[feature])
     seconds_df = df[feature].diff().iloc[1:].apply(lambda dt: dt.seconds)
     assert len(seconds_df.unique()) == times, f"{feature} | {str(seconds_df.nunique())} != {times}"
 
-    print(f"VALIDATED: {feature} | count = {len(seconds_df.unique())} | unique = {list(seconds_df.unique())}")
-    sys.stdout.flush()
+    if print_out:
+        print(f"VALIDATED: {feature} | count = {len(seconds_df.unique())} | unique = {list(seconds_df.unique())}")
+
+
+def validate_timeseries_df_s(df_s, feature, print_out=True):
+    symbol = df_s[0].iloc[0][_SYMBOL]
+
+    discretization_s = []
+    for df in df_s:
+        discretization_s.append(df.iloc[0][_DISCRETIZATION])
+        validate_timeseries_df(df, feature, print_out=False)
+
+    if print_out:
+        print(f"VALIDATED: {symbol} | {feature} | {discretization_s}")
 
 
 def validate_timeseries_df(df, feature, origin_df=None, print_out=True):
     symbol = df.iloc[0][_SYMBOL]
     discretization = df.iloc[0][_DISCRETIZATION]
-    first_utc_dt = df.iloc[0][_UTC_TIMESTAMP]
-    last_utc_dt = df.iloc[-1][_UTC_TIMESTAMP]
+    first_time_feature_dt = df.iloc[0][feature]
+    last_time_feature_dt = df.iloc[-1][feature]
     df[feature] = pd.to_datetime(df[feature])
     seconds_df = df[feature].diff().iloc[1:].apply(lambda dt: dt.seconds)
     assert len(seconds_df.unique()) == 1, f"{symbol} | {feature} | {discretization} | {str(seconds_df.nunique())} != {1}"
@@ -1856,8 +2224,7 @@ def validate_timeseries_df(df, feature, origin_df=None, print_out=True):
         assert df.iloc[-1].name == origin_df.iloc[-1].name, f"FAILED TIMESERIES VALIDATION: {symbol} | {feature} | {discretization} | {df.iloc[-1].name} != {origin_df.iloc[-1].name}"
 
     if print_out:
-        print(f"VALIDATED: {symbol} | {feature} | {discretization} | count = {len(seconds_df.unique())} | unique = {seconds_df.unique()} | first_utc_dt = {datetime_h_m__d_m_y(first_utc_dt)} | last_utc_dt = {datetime_h_m__d_m_y(last_utc_dt)}")
-        sys.stdout.flush()
+        print(f"VALIDATED: {symbol} | {feature} | {discretization} | count = {len(seconds_df.unique())} | unique = {seconds_df.unique()} | first_{feature} = {datetime_h_m__d_m_y(first_time_feature_dt)} | last_{feature} = {datetime_h_m__d_m_y(last_time_feature_dt)}")
 
 
 def produce_balance_df(balance_dict):
@@ -1969,6 +2336,9 @@ def init_symbol_discr_dfs_s(group_df, symbol_date_constraint_s, discretization_s
         'in_out_features': in_out_features,
     } for symbol_date_constraint in symbol_date_constraint_s]
 
+    if is_running_under_pycharm_debugger():
+        return [init_symbol_disc_dfs(param) for param in arg_s]
+
     if is_silent_load:
         if num_workers > 1 and len(arg_s) > 1:
             with multiprocessing.Pool(num_workers) as pool:
@@ -1999,7 +2369,7 @@ def modify_config_1(configs_suffix, net_cpu_empty):
     config = read_json(CONFIGS_FILE_PATH(suffix=configs_suffix))
     exclude_modify_symbol_s = config['exclude_modify_symbol_s']
     exclude_from_train_symbol_s = config['exclude_symbol_s']
-    
+
     printmd(f"SPLIT DATE TIME [TRAIN/TEST]: **{split_date_str}**")
 
     return modify_config(config, net_cpu_empty, split_date_str, exclude_modify_symbol_s, exclude_from_train_symbol_s)
@@ -2222,7 +2592,7 @@ def dd_cl__diff_dist_cl(diff_cl_s, dist_cl_s, dd_cl, is_included=True):
     ignore_clazz = get_ignore_clazz(diff_cl_s=diff_cl_s, dist_cl_s=dist_cl_s)
     if not is_included or dd_cl == ignore_clazz:
         diff_dist_ignore_cl = get_ignore_diff_dist_cl(diff_cl_s=diff_cl_s)
-        
+
         return hashablelist(diff_dist_ignore_cl)
 
     diff_center_cl = get_diff_center_cl(diff_cl_s=diff_cl_s)
@@ -2582,6 +2952,37 @@ def produce_tpr(direction, close, next_close):
     return diff
 
 
+def produce_tpr_ptp(direction, close, next_close, current_next_segment, plr=3.0):
+    col_s = current_next_segment.columns.to_list()
+    current_next_segment = current_next_segment[col_s[2:8] + col_s[-3:]]
+    current_next_segment_sliced = current_next_segment.iloc[1:]
+
+    if direction == SIGNAL_LONG_IN:
+        tpr_rel = next_close / close - 1
+        stop_loss_price = close / (1 + tpr_rel / plr)
+        lower_bound = current_next_segment_sliced['low'].min()
+        ptp = 0 if lower_bound < stop_loss_price else 1
+        tpr = tpr_rel
+
+        slr_rel = close / stop_loss_price - 1
+
+    elif direction == SIGNAL_SHORT_IN:
+        tpr_rel = close / next_close - 1
+        higher_bound = current_next_segment_sliced['high'].max()
+        stop_loss_price = close * (1 + tpr_rel / plr)
+        ptp = 0 if higher_bound > stop_loss_price else 1
+        tpr = -tpr_rel
+
+        slr_rel = stop_loss_price / close - 1
+    else:
+        raise RuntimeError(f"UNSUPPORTED DIRECTION: {direction}")
+
+    isclose = np.isclose(tpr_rel, slr_rel * 3, rtol=1.e-50)
+    assert isclose, f"TPR_REL: {tpr_rel} != SLR_REL * PLR: {slr_rel * plr}"
+
+    return tpr, ptp
+
+
 def produce__diff_dist__values(df, threshold):
     symbol = df.iloc[0][_SYMBOL]
     discretization = df.iloc[0][_DISCRETIZATION]
@@ -2658,7 +3059,7 @@ def produce__diff_dist__values(df, threshold):
     return df
 
 
-def produce__differential(df, threshold):
+def produce__differential(df, threshold, plr=3.0):
     input_feature_col_s = get_input_feature_col_s(df)
     threshold_col_s = get_threshold_col_s(df, threshold)
     df = df[[*input_feature_col_s, *threshold_col_s]]
@@ -2666,24 +3067,25 @@ def produce__differential(df, threshold):
     _signal = __SIGNAL(threshold)
     _next_close = f'next_close_{threshold}'
     _tpr = __TPR(threshold)
+    _ptp = __PTP(threshold, plr)
 
     i = 0
     for curr_idx, row in df.iterrows():
         sliced_df = df.loc[curr_idx:]
 
-        curr_signal = row[_signal]
-        curr_price = row[_CLOSE]
+        current_signal = row[_signal]
+        current_close = row[_CLOSE]
 
-        if curr_signal == SIGNAL_IGNORE:
+        if current_signal == SIGNAL_IGNORE:
             next_signal_row_s = sliced_df.loc[(sliced_df[_signal] != SIGNAL_IGNORE)].head(1)
             if len(next_signal_row_s) > 0:
                 next_not_ignore_signal = next_signal_row_s.squeeze()[_signal]
                 direction = SIGNAL_SHORT_IN if next_not_ignore_signal == SIGNAL_LONG_IN else SIGNAL_LONG_IN
 
-        if curr_signal == SIGNAL_SHORT_IN:
+        if current_signal == SIGNAL_SHORT_IN:
             direction = SIGNAL_SHORT_IN
 
-        if curr_signal == SIGNAL_LONG_IN:
+        if current_signal == SIGNAL_LONG_IN:
             direction = SIGNAL_LONG_IN
 
         if direction == SIGNAL_SHORT_IN:
@@ -2698,9 +3100,12 @@ def produce__differential(df, threshold):
         else:
             next_signal_row = sliced_df.tail(1).squeeze()
 
-        next_signal_price = next_signal_row[_CLOSE]
-        diff = produce_tpr(direction, curr_price, next_signal_price)
-        df.loc[curr_idx, _tpr] = diff
+        next_signal_idx = next_signal_row.name
+        next_close = next_signal_row[_CLOSE]
+        current_next_segment = df.loc[curr_idx:next_signal_idx]
+        tpr, ptp = produce_tpr_ptp(direction, current_close, next_close, current_next_segment, plr)
+
+        df.loc[curr_idx, [_tpr, _ptp]] = [tpr, ptp]
 
         i += 1
 
@@ -2840,30 +3245,52 @@ def produce_next_grad_n_df__unwrap(pair):
     return df
 
 
+def produce_differential(df, threshold, plr=3.0, include_existing_features=False, print_out=False):
+    symbol = df.iloc[0][_SYMBOL]
+    discretization = df.iloc[0][_DISCRETIZATION]
+
+    zigzagized_title = ""
+    if __SIGNAL(threshold) not in df:
+        df = zigzagize_all(symbol, [df], [threshold], print_out=False)[0]
+        zigzagized_title = f"ZIGZAGIZED: {threshold}"
+
+    differentified_title = ""
+    if __TPR(threshold) not in df or __PTP(threshold, plr) not in df:
+        df = produce__differential(df, threshold, plr)
+        differentified_title = f"DIFFERENTIFIED: {threshold}"
+
+    df.meta_data = [symbol, discretization, zigzagized_title, differentified_title]
+
+    log_s = ["ZIGZAG & DIFF"]
+
+    if not include_existing_features:
+        required_col_s = [col for col in df.columns if str(threshold) in col]
+        df = df[[*[_SYMBOL, _DISCRETIZATION, _KIEV_TIMESTAMP, _UTC_TIMESTAMP, 'open', 'high', 'low', 'close'], *required_col_s]]
+        log_s.append(f"INCLUDE EXISTING FEATURES")
+
+    if print_out:
+        if zigzagized_title:
+            log_s.append(zigzagized_title)
+        if differentified_title:
+            log_s.append(differentified_title)
+
+    if log_s:
+        print(" | ".join(log_s))
+
+    return df
+
+
 def retrieve__produce_differential__unwrap(param_s):
+    symbol = param_s['symbol']
+    discretization = param_s['discretization']
+    threshold = param_s['threshold']
+    plr = param_s['plr']
+    start_dt = param_s['start_dt'] if 'start_dt' in param_s else None
+    end_dt = param_s['end_dt'] if 'end_dt' in param_s else None
+
     try:
-        symbol = param_s['symbol']
-        discretization = param_s['discretization']
-        threshold = param_s['threshold']
-        start_dt = param_s['start_dt'] if 'start_dt' in param_s else None
-        end_dt = param_s['end_dt'] if 'end_dt' in param_s else None
-
-        symbol_discr__df = retrieve_all(symbol, [discretization], start_dt, end_dt, print_out=False)[0]
-
-        zigzagized_title = ""
-        if __SIGNAL(threshold) not in symbol_discr__df:
-            symbol_discr__df = zigzagize_all(symbol, [symbol_discr__df], [threshold], print_out=False)[0]
-            zigzagized_title = f"ZIGZAGIZED: {threshold}"
-
-        differentified_title = ""
-        if __TPR(threshold) not in symbol_discr__df:
-            symbol_discr__df = produce__differential(symbol_discr__df, threshold)
-            differentified_title = f"DIFFERENTIFIED: {threshold}"
-
-        symbol_discr__df.meta_data = [symbol, discretization, zigzagized_title, differentified_title]
-
-        required_col_s = [col for col in symbol_discr__df.columns if str(threshold) in col]
-        df = symbol_discr__df[[*[_SYMBOL, _DISCRETIZATION, _KIEV_TIMESTAMP, _UTC_TIMESTAMP, 'open', 'high', 'low', 'close'], *required_col_s]]
+        df_s = retrieve_all(symbol, [discretization], start_dt, end_dt, print_out=True)
+        df = produce_differential(df_s[0], threshold, plr)
 
         return df
     except Exception as ex:
@@ -3094,31 +3521,24 @@ def produce_dummy_dataset_factory(model_suffix=None):
     return lambda net_cpu_empty, samples_count: DummyDataset(net_cpu_empty, samples_count)
 
 
-def produce_dummy_net_cpu(net, _produce_dummy_dataset):
+def initialize_empty_net_cpu(net, _produce_dummy_dataset):
     import torch
 
-    dummy_input, dummy_output = next(enumerate(_produce_dummy_dataset(net, 1)))[1]
-    if isinstance(dummy_input, tuple):
-        dummy_input_s_0 = dummy_input[0].unsqueeze(0).float()
-        dummy_input_s_1 = dummy_input[1].unsqueeze(0).float()
+    dummy_input, dummy_meta, dummy_output = next(enumerate(_produce_dummy_dataset(net, 1)))[1]
+    input_tensor = torch.from_numpy(dummy_input).unsqueeze(0)
+    meta_tensor = torch.from_numpy(dummy_meta).unsqueeze(0)
+    output_tensor = torch.from_numpy(dummy_output).unsqueeze(0)
 
-        if torch.cuda.is_available() and USE_GPU():
-            net = net.cuda()
-            dummy_input_s_0 = dummy_input_s_0.cuda()
-            dummy_input_s_1 = dummy_input_s_1.cuda()
+    if torch.cuda.is_available() and USE_GPU():
+        net = net.cuda()
 
-        net(dummy_input_s_0, dummy_input_s_1)
-    else:
-        dummy_input_s = dummy_input.unsqueeze(0).float()
+        input_tensor = input_tensor.cuda()
+        meta_tensor = meta_tensor.cuda()
+        output_tensor = output_tensor.cuda()
 
-        if torch.cuda.is_available() and USE_GPU():
-            net = net.cuda()
-            dummy_input_s = dummy_input_s.cuda()
+    net.predict_raw(input_tensor, meta_tensor, output_tensor)
 
-        net(dummy_input_s)
-
-    from SRC.NN.BaseContinousNN import BaseContinousNN
-    if not check_env_true(_FINE_TUNE_NET) and not isinstance(net, BaseContinousNN):
+    if not check_env_true(_FINE_TUNE_NET):
         net.initialize_weights()
 
     return net
@@ -3134,6 +3554,7 @@ def parse_model_name(name):
         ep_val = int(name.split('-')[-1].replace("EP", ""))
     except:
         ep_val = -1
+
     return (x_val, ep_val)
 
 
@@ -3193,9 +3614,9 @@ def assert__input_features_exists(df_s, discretization_feature_s):
         df = [df for df in df_s if df.iloc[0][_DISCRETIZATION] == discretization][0]
         valid = all(feature in df.columns for feature in feature_s)
         valid_s.append(valid)
-        
+
     assert all(valid_s), f"FAILED INPUT FEATURES VALIDATION: {symbol} | {discretization_feature_s}"
-        
+
 
 def produce__weight_diff_dist_data_map(discretization, threshold):
     try:
@@ -3325,6 +3746,45 @@ def candelify(df, symbol, discretization, shift_idx=False, shift_open_close=Fals
     return df_ohlc
 
 
+def candelify_ohlc(df, symbol, discretization, upper_reindex=False, shift_idx=False, shift_open_close=False, target_feature='price'):
+    interval_partition = INTERVAL_PARTITION(discretization)
+
+    if upper_reindex:
+        last_idx = df.index.to_list()[-1]
+        upper_step = round_up_to_nearest_step(last_idx, TIME_DELTA(discretization))
+        reindex_timedelta = upper_step - last_idx
+        df.index = df.index + reindex_timedelta
+
+    if all(col in df.columns for col in ['open', 'high', 'low', 'close']):
+        # Aggregate existing OHLC properly
+        df_ohlc = df.resample(interval_partition).agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            # optional: you can sum volume if present
+            **({'volume': 'sum'} if 'volume' in df.columns else {})
+        })
+    else:
+        # fallback: compute OHLC from single price field
+        df_ohlc = df[target_feature].resample(interval_partition).ohlc()
+
+    if shift_idx:
+        df_ohlc.index = df_ohlc.index + TIME_DELTA(discretization)
+
+    if shift_open_close:
+        df_ohlc['open'] = df_ohlc['close'].shift(1).combine_first(df_ohlc['open'])
+
+    df_ohlc[_SYMBOL] = symbol
+    df_ohlc[_DISCRETIZATION] = discretization
+    df_ohlc[_KIEV_TIMESTAMP] = df_ohlc.index.map(as_kiev_tz)
+    df_ohlc[_UTC_TIMESTAMP] = df_ohlc.index.map(as_utc_tz)
+
+    df_ohlc = order_main_cols_df(df_ohlc)
+
+    return df_ohlc
+
+
 def pdf_featurize_timestamp_s(pdf, rule_s):
     for rule in rule_s:
         target_col = rule[0]
@@ -3344,6 +3804,42 @@ def calc_geometric_mean(metric_value_s):
     geometric_mean = math.prod(metric_value_s) ** (1 / len(metric_value_s))
 
     return geometric_mean
+
+
+def TEST__COMPARE__GROUP_REAL_TIME():
+    from IPython.core.display_functions import display
+
+    from SRC.CORE.debug_utils import produce_measure
+
+    symbol = 'BTCUSDT'
+    market_type = 'FUTURES'
+    discretization_s = ['5M', '1H']
+    segments = 60
+
+    measure1 = produce_measure()
+    input_group = fetch_featurize_realtime_group_all(market_type, symbol, discretization_s, segments)
+    duration1 = measure1()
+
+    measure2 = produce_measure()
+    input_group_resampled = fetch_featurize_realtime_group_resampled_all(market_type, symbol, discretization_s, segments)
+    duration2 = measure2()
+
+    print('=' * 100)
+    # print(f"fetch_featurize_realtime_group_all duration: {duration1} seconds")
+    # print('-'*100)
+    display(input_group[0][['kiev_timestamp', 'open', 'high', 'low', 'close']].tail())
+    display(input_group[-1][['kiev_timestamp', 'open', 'high', 'low', 'close']].tail())
+
+    print()
+
+    print('=' * 100)
+    # print(f"fetch_featurize_realtime_group_resampled_all duration: {duration2} seconds")
+    # print('-'*100)
+    display(input_group_resampled[0][['kiev_timestamp', 'open', 'high', 'low', 'close']].tail())
+    display(input_group_resampled[-1][['kiev_timestamp', 'open', 'high', 'low', 'close']].tail())
+
+    print()
+    print('=' * 100)
 
 
 def TEST__COMPARE__GROUPING_DF_LIST():
@@ -3458,6 +3954,8 @@ def TEST__DIFF_DIST_BIN_CL_OH():
 
 
 if __name__ == "__main__":
-    TEST__COMPARE__GROUPING_DF_LIST()
-    TEST__DIFF_DIST_BIN_CL_OH()
-    TEST__get_model_name_s()
+    TEST__COMPARE__GROUP_REAL_TIME()
+    # TEST__COMPARE_TA_IMPLS()
+    # TEST__COMPARE__GROUPING_DF_LIST()
+    # TEST__DIFF_DIST_BIN_CL_OH()
+    # TEST__get_model_name_s()

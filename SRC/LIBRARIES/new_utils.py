@@ -30,29 +30,27 @@ import diskcache as dc
 import numpy as np
 import pandas as pd
 import requests
+from IPython.core.display import Markdown
 from IPython.core.display_functions import DisplayHandle, display
 from IPython.display import HTML
+from filelock import FileLock
 from filelock import Timeout
 from requests import ReadTimeout
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import roc_curve, auc
-
-from json import JSONDecodeError as JSONDecodeError2
-from json.decoder import JSONDecodeError as JSONDecodeError1
 
 from SRC.CORE.MPDeque import MPDeque
 from SRC.CORE._CONSTANTS import CPU_COUNT, MODEL_FOLDER_PATH, _TRADES_FILE_PATH, _TRADES_RUNNER_FILE_PATH, project_root_dir, _TOP_UP_NET_FOLDER_PATH, OUT_SEGMENT, _DASHBOARD_SEGMENT, KIEV_TZ, _BALANCE_FILE_PATH, NO_TRADES_TIMEOUT, \
     OVER_TIMEOUT, _CONFIGS_SUFFIX, USE_GPU, _SYMBOL, _DISCRETIZATION, _MODEL_SUFFIX, _RESOURCES_FORMAT_JUPYTER, _DASHBOARD_SEGMENT_NET_FULL_PATH, _BACKTESTING, _AUTOTRADING
 from SRC.CORE._CONSTANTS import _CANDLE_FILE_PATH, _DATETIME_PRICE_FILE_PATH, _DATETIME_PRICES_FILE_PATH
 from SRC.CORE.debug_utils import get_processing_device, produce_measure, is_cloud, format_memory, get_current_notebook_name, is_running_in_notebook, DEBUG, DEBUG_SPLITTED, ERROR_SPLITTED, EXCEPTION_SPLITTED, produce_formatters, \
-    is_running_under_pycharm_debugger, is_running_under_pycharm, log_context, CONSOLE, CONSOLE_SPLITTED, NOTICE, IS_DEBUG, NOTICE_SPLITTED
+    is_running_under_pycharm_debugger, is_running_under_pycharm, log_context, CONSOLE, NOTICE, IS_DEBUG, CONSOLE_SPLITTED
 from SRC.CORE.debug_utils import printmd
 from SRC.CORE.server_setup import parse_port_mapping
-from SRC.CORE.utils import datetime_h_m_s__d_m_Y, write_json, datetime_h_m_s, datetime_Y_m_d__h_m_s, read_json, read_json_safe_retry
+from SRC.CORE.utils import datetime_h_m_s__d_m_Y, write_json, datetime_h_m_s, datetime_Y_m_d__h_m_s, read_json_safe_retry
 from SRC.CORE.utils import read_json_safe
 from SRC.LIBRARIES.concurrent_utils import iterate_multiprocess_pool, iterate_multiprocess_executor, iterate_multithread_executor
-from SRC.LIBRARIES.time_utils import TIME_DELTA, utc_now, kiev_now, kiev_now_formatted
-from filelock import FileLock
+from SRC.LIBRARIES.time_utils import TIME_DELTA, kiev_now, kiev_now_formatted
 
 
 try:
@@ -60,10 +58,6 @@ try:
 except:
     from zoneinfo import ZoneInfo
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from SRC.NN import BaseDiscreateNN
 
 
 def set_without_reordering(input_list):
@@ -198,7 +192,7 @@ def calculate_metrics_deprecated(signal_encoder, act_oh_s, pred_oh_prob_s, label
     return auc_roc, conf_mtx
 
 
-def calculate_metrics_optimized(net_cpu_empty, act_oh_a, pred_oh_prob_a, cpu_count, norm_conf_mtx=None):
+def calculate_discreate_metrics_optimized(net_cpu_empty, act_oh_a, pred_oh_prob_a, cpu_count, norm_conf_mtx=None):
     from SRC.LIBRARIES.new_data_utils import calculate_backprop_metircs_concurrent
 
     # title = f"---------OPTIMIZED APPROACH---------"
@@ -353,7 +347,7 @@ def func_multi(_iterator, _func, arg_s, num_workers=1, finished_title="", print_
     result_s = []
     if num_workers > 1 and len(arg_s) > 1 and not is_running_under_pycharm_debugger():
         if print_out:
-            printmd(f'=== START {finished_title_}CONCURRENT EXECUTION | WORKERs: {_b(num_workers)} | JOBs: {_b(len(arg_s))} || started: {_b(datetime_Y_m_d__h_m_s(kiev_now()))} ===')
+            printmd(f'=== START {finished_title_}CONCURRENT EXECUTION | WORKERs: {_b(num_workers)} | JOBs: {_b(len(arg_s))} || STARTED: {_b(datetime_Y_m_d__h_m_s(kiev_now()))} ===')
         for result in _iterator(_func, arg_s, num_workers):
             if result is None:
                 printer(result)
@@ -364,10 +358,10 @@ def func_multi(_iterator, _func, arg_s, num_workers=1, finished_title="", print_
 
         duration = measure()
         if print_out:
-            printmd(f'=== END {finished_title_}EXECUTION | finished: {_b(datetime_Y_m_d__h_m_s(kiev_now()))} | duration: {_b(duration)} ===')
+            printmd(f'=== END {finished_title_}EXECUTION | finished: {_b(datetime_Y_m_d__h_m_s(kiev_now()))} | DURATION: {_b(duration)} ===')
     else:
         if print_out:
-            printmd(f'--- START {finished_title_}SEQUENTIAL EXECUTION | JOBs: {_b(len(arg_s))} || started: {_b(datetime_Y_m_d__h_m_s(kiev_now()))} ---')
+            printmd(f'--- START {finished_title_}SEQUENTIAL EXECUTION | JOBs: {_b(len(arg_s))} || STARTED: {_b(datetime_Y_m_d__h_m_s(kiev_now()))} ---')
         for arg in arg_s:
             result = _func(arg)
             if result is None:
@@ -379,7 +373,7 @@ def func_multi(_iterator, _func, arg_s, num_workers=1, finished_title="", print_
 
         duration = measure()
         if print_out:
-            printmd(f'--- END {finished_title_}EXECUTION | finished: {_b(datetime_Y_m_d__h_m_s(kiev_now()))} | duration: {_b(duration)} ---')
+            printmd(f'--- END {finished_title_}EXECUTION | FINISHED: {_b(datetime_Y_m_d__h_m_s(kiev_now()))} | DURATION: {_b(duration)} ---')
 
     time.sleep(2)
 
@@ -444,21 +438,19 @@ def write_model(net, optimizer=None, model_name_suffix=None, print_out=True):
     file_path = f'{folder}/{model_name_suffix}.pt'
 
     if torch.cuda.is_available() and torch.cuda.device_count() > 1 and isinstance(net, nn.DataParallel):
-        if optimizer is not None:
-            torch.save({
-                "model": net.module.state_dict(),
-                "optimizer": optimizer.state_dict(),
-            }, file_path)
-        else:
-            torch.save(net.module.state_dict(), file_path)
+        state_dict = {
+            "model": net.module.state_dict(),
+        }
     else:
-        if optimizer is not None:
-            torch.save({
-                "model": net.state_dict(),
-                "optimizer": optimizer.state_dict(),
-            }, file_path)
-        else:
-            torch.save(net.state_dict(), file_path)
+        state_dict = {
+            "model": net.state_dict()
+        }
+
+    if optimizer is not None:
+        state_dict["optimizer"] = optimizer.state_dict()
+
+    net.write_configs(state_dict)
+    torch.save(state_dict, file_path)
 
     if print_out:
         print(f"Model written: {file_path}")
@@ -494,37 +486,54 @@ def produce_empty_net(name_suffix) -> 'IModelBase':
 def read_model(model_name_suffix, print_out=True, default_net=None):
     import torch
     from SRC.LIBRARIES.new_data_utils import produce_dummy_dataset_factory
-    from SRC.LIBRARIES.new_data_utils import produce_dummy_net_cpu
+    from SRC.LIBRARIES.new_data_utils import initialize_empty_net_cpu
+    from SRC.NN.BaseNN import read_configs
+
+    if torch.cuda.is_available() and USE_GPU():
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
 
     file_path = f'{MODEL_FOLDER_PATH()}/{model_name_suffix}.pt'
+    try:
 
-    net = default_net if default_net is not None else produce_empty_net(model_name_suffix)
+        checkpoint = torch.load(file_path, map_location=device)
+        read_configs(checkpoint)
 
-    if isinstance(net, getattr(importlib.import_module(f'SRC.NN.BaseNN'), 'BaseNN')):
+        net = default_net if default_net is not None else produce_empty_net(model_name_suffix)
+
+        if not isinstance(net, getattr(importlib.import_module(f'SRC.NN.BaseNN'), 'BaseNN')):
+            raise RuntimeError(f'Model class [{model_name_suffix}] should derive from BaseNN module')
+
         dummy_dataset_factory = produce_dummy_dataset_factory(model_name_suffix)
-        net = produce_dummy_net_cpu(net, dummy_dataset_factory)
+        net = initialize_empty_net_cpu(net, dummy_dataset_factory)
 
-        if torch.cuda.is_available() and USE_GPU():
-            device = torch.device('cuda')
-        else:
-            device = torch.device('cpu')
+        net.load_state_dict(checkpoint["model"])
+        details = f"~~~SUCCESSFULLY READ MODEL STATE >> INITIALIZED~~~"
+    except KeyError:
+        state_dict = torch.load(file_path, map_location=device)
+        read_configs(state_dict)
 
-        try:
-            checkpoint = torch.load(file_path, map_location=device)
-            net.load_state_dict(checkpoint["model"])
-            details = f"~~~SUCCESSFULLY READ MODEL STATE >> INITIALIZED~~~"
-        except KeyError:
-            state_dict = torch.load(file_path, map_location=device)
-            net.load_state_dict(state_dict)
-            details = f"!!!UNABLE TO READ MODEL STATE [NO 'model' in checkpoint]>> OLD APPROACH DURING READ MODEL STATE!!!"
+        net = default_net if default_net is not None else produce_empty_net(model_name_suffix)
 
-        net.to(device)
+        net.read_configs(state_dict)
+        net.load_state_dict(state_dict)
+        details = f"!!!UNABLE TO READ MODEL STATE [NO 'model' in checkpoint]>> OLD APPROACH DURING READ MODEL STATE!!!"
 
-        if print_out:
-            print(f"Model read: {file_path} | {device} | {next(net.parameters()).device} | {details}")
-            sys.stdout.flush()
-    else:
-        raise RuntimeError(f'Model class [{model_name_suffix}] should derive from BaseNN module')
+    net.to(device)
+
+    segments = net.segments_count()
+    discretization_s = net.inference_discretization_s()
+    threshold = net.threshold()
+
+    if print_out:
+        print(*[
+            f"{'.' * 70}",
+            f"\r\n{details}",
+            f"\r\nModel: {file_path} | {device} | {next(net.parameters()).device}",
+            f"\r\nsegments: {segments} | discretization_s: {discretization_s} | threshold: {threshold}",
+            f"\r\n{'.' * 70}",
+        ])
 
     return net
 
@@ -799,22 +808,21 @@ def get_datetime_price():
 
     return datetime_price
 
-    # from SRC.LIBRARIES.binance_helpers import get_market_symbol_ticker_current_price
-    #
-    # net_folder = datetime_price_file_path.split("/")[-2]
-    # net_data = parse_net_folder(net_folder)
-    # symbol = net_data['symbol']
-    # market = net_data['market']
-    # market_type = market.split("__")[0]
-    #
-    # EXCEPTION_SPLITTED(f'Price candle writer is not being runned OR FUTURES symbol no longer available [PROBABLY]: {symbol} | {net_folder}')
-    #
-    # price = tryall_delegate(lambda: get_market_symbol_ticker_current_price(symbol, market_type), 'GET PRICE', tryalls_count=5)
-    #
-    # return {
-    #     "date_time": utc_now(),
-    #     "price": price
-    # }
+
+def write_datetime_price_candle(group):
+    price_file_path = _DATETIME_PRICE_FILE_PATH()
+    candle_file_path = _CANDLE_FILE_PATH()
+
+    create_folder_file(price_file_path, clear_file=False)
+    create_folder_file(price_file_path, clear_file=False)
+
+    target_df = group[0]
+    last_row = target_df.iloc[-1]
+    last_row_utc_ts = last_row['utc_timestamp'].to_pydatetime()
+    candle = {'close_time': last_row_utc_ts, 'open': last_row['open'], 'high': last_row['high'], 'low': last_row['low'], 'close': last_row['close']}
+    datetime_price = {'date_time': candle['close_time'], 'price': candle['close']}
+    write_json(datetime_price, price_file_path)
+    write_json(candle, candle_file_path)
 
 
 def show_notebook_train_result(notebook_name):
@@ -850,8 +858,24 @@ def string_bool(string_bool):
     return bool(distutils.util.strtobool(string_bool))
 
 
+def set_env(key, value):
+    value = str(value)
+
+    if key in os.environ:
+        if os.environ[key] == value:
+            print(f"env: {key}={os.environ[key]}")
+        else:
+            printmd(f"ENV: {key}={value} >> ***{os.environ[key]}***")
+    else:
+        os.environ[key] = value
+        print(f"env: {key}={os.environ[key]}")
+
+
 def env_string(env_key, default=None):
-    return os.environ[env_key] if env_key in os.environ else default
+    value = os.environ[env_key] if env_key in os.environ else default
+    value = None if value == "None" else value
+
+    return value
 
 
 def env_float(env_key, default=np.nan):
@@ -1733,6 +1757,12 @@ def produce_resource_usage_format(mode=_RESOURCES_FORMAT_JUPYTER):
     return get_resources_usage_format
 
 
+def print_resources_usage_jupyter():
+    resources_usage_format_jupyter = produce_resource_usage_format(_RESOURCES_FORMAT_JUPYTER)
+
+    display(Markdown(resources_usage_format_jupyter()))
+
+
 def RAM_usage():
     from SRC.CORE.debug_utils import format_memory
     import psutil
@@ -1776,7 +1806,7 @@ def RAM_usage():
 
 def split_list_into_chunks(input_list, chunk_size):
     if chunk_size == 0:
-        return input_list
+        return [input_list]
 
     return [input_list[i:i + chunk_size] for i in range(0, len(input_list), chunk_size)]
 
@@ -1849,14 +1879,17 @@ def print_populated_char_n_times(char, times, title=None):
     print(populate_char_n_times(char, times, title=title))
 
 
-def printmd_populated_char_n_times(char, times, title=None, decorate='', color=None):
+def printmd_populated_char_n_times(char, times, title=None, decorate='', color=None, override=True):
     if decorate == '':
         printmd(populate_char_n_times(char, times, title=title), color=color)
     else:
-        if decorate == '**':
-            printmd(f"<b>{populate_char_n_times(char, times, title=title)}<b>", color=color)
-        if decorate == '***':
-            printmd(f"<b><i>{populate_char_n_times(char, times, title=title)}</i></b>", color=color)
+        if override:
+            if decorate == '**':
+                printmd(f"<b>{populate_char_n_times(char, times, title=title)}<b>", color=color)
+            if decorate == '***':
+                printmd(f"<b><i>{populate_char_n_times(char, times, title=title)}</i></b>", color=color)
+        else:
+            printmd(f"{decorate}{populate_char_n_times(char, times, title=title)}{decorate}", color=color)
 
 
 def merge_dict_s(target_dicts):
@@ -1896,8 +1929,28 @@ def calc_circle_segment(start_angle=0, end_angle=360, radius=1):
 
 
 def set_torch_multiprocess_start_method():
-    if 'START_METHOD' in os.environ:
+    if os.environ['START_METHOD'] == 'SPAWN':
         import torch.multiprocessing as mp
+
+        mp.set_start_method('spawn', force=True)
+
+    # if 'START_METHOD' in os.environ:
+    #     import torch.multiprocessing as mp
+    #
+    #     if os.environ['START_METHOD'] == 'SPAWN':
+    #         mp.set_start_method('spawn', force=True)
+    #
+    #     if os.environ['START_METHOD'] == 'FORK':
+    #         mp.set_start_method('fork', force=True)
+    #
+    #     start_method = mp.get_start_method()
+    #
+    #     printmd(f"**START METHOD:** ***{str(start_method).upper()}***")
+
+
+def set_multiprocess_start_method():
+    if 'START_METHOD' in os.environ:
+        import multiprocessing as mp
 
         if os.environ['START_METHOD'] == 'SPAWN':
             mp.set_start_method('spawn', force=True)
@@ -2016,9 +2069,6 @@ def run_test_single_net(_net_producer):
 
     torch.cuda.empty_cache()
 
-    from SRC.NN.BaseDiscreateNN import BaseDiscreateNN
-    from SRC.NN.BaseContinousNN import BaseContinousNN
-
     from SRC.LIBRARIES.new_data_utils import produce_dummy_dataset_factory
 
     config_suffix = 'DUMMY_stage4'
@@ -2027,46 +2077,73 @@ def run_test_single_net(_net_producer):
     dummy_dataset_factory = produce_dummy_dataset_factory(config_suffix)
     net = _net_producer()
 
-    try:
-        if isinstance(net, BaseDiscreateNN):
-            BaseDiscreateNN.test_single(net, dummy_dataset_factory, config_suffix)
-        elif isinstance(net, BaseContinousNN):
-            BaseContinousNN.test_single(net, dummy_dataset_factory, config_suffix)
-        else:
-            raise RuntimeError(f"WRONG NET TYPE PROVIDED TO run_nn_training_result_console: {type(net)}")
-
-    except RuntimeError as err:
-        if 'NOT USED ANYMORE' in str(err):
-            print(str(err))
-        else:
-            raise
+    test_single(net, dummy_dataset_factory, config_suffix)
 
     torch.cuda.empty_cache()
 
 
-def run_test_single_net_continous(_net_producer):
+def test_single(net, _produce_dummy_dataset, config_suffix):
+    import os
+    import sys
+
     import torch
+    from torch import nn
+    from torch.optim.lr_scheduler import CosineAnnealingLR
+    from torch.utils.data import DataLoader
 
-    torch.cuda.empty_cache()
+    from SRC.CORE._CONSTANTS import USE_GPU, _USE_GPU_DATA_PARALLEL, MODEL_FOLDER_PATH
+    from SRC.CORE.debug_utils import printmd
+    from SRC.LIBRARIES.new_data_utils import initialize_empty_net_cpu, produce_dummy_dataset_factory
+    from SRC.NN.IModelBase import IModelBase
+    from SRC.NN.BaseDiscreateNN import BaseDiscreateNN
 
-    from SRC.NN.BaseContinousNN import BaseContinousNN
-    from SRC.LIBRARIES.new_data_utils import produce_dummy_dataset_factory
+    net_cpu_empty = net
 
-    config_suffix = 'stage4'
-    os.environ[_CONFIGS_SUFFIX] = config_suffix
+    net = initialize_empty_net_cpu(net, _produce_dummy_dataset)
 
     dummy_dataset_factory = produce_dummy_dataset_factory(config_suffix)
-    net = _net_producer()
 
-    try:
-        BaseContinousNN.test_single(net, dummy_dataset_factory, config_suffix)
-    except RuntimeError as err:
-        if 'NOT USED ANYMORE' in str(err):
-            print(str(err))
-        else:
-            raise
+    if torch.cuda.is_available() and USE_GPU():
+        net = net.cuda()
 
-    torch.cuda.empty_cache()
+        if torch.cuda.device_count() > 1 and check_env_true(_USE_GPU_DATA_PARALLEL):
+            printmd(f"**GPU DATA PARALLEL ENABLED** | GPU count: ***{torch.cuda.device_count()}***")
+            net = nn.DataParallel(net)
+
+    samples_count = 32
+    batch_size = 100
+    lr = 0.001
+    eta_min = lr / 10
+    t_max = 10
+
+    def data_loader_batched(title):
+        data_loader_batched = DataLoader(dataset=dummy_dataset_factory(net_cpu_empty, samples_count), batch_size=batch_size)
+
+        for j, (input_array, meta_array, output_array) in enumerate(data_loader_batched):
+            yield input_array, meta_array, output_array
+
+    optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=1e-5)
+    scheduler = CosineAnnealingLR(optimizer, T_max=t_max, eta_min=eta_min)
+
+    performance_training = net.perform_training('BATCHED TRAIN SIMULATION', data_loader_batched, net, optimizer, scheduler)
+    performance_evaluation = net.perform_evaluation(data_loader_batched, net)
+
+    print(f"TRAIN PERFORMANCE: {filter_dict(performance_training, filter_field_s=['mean_loss'], exclude=False)}")
+    print(f"EVALUATION PERFORMANCE: {filter_dict(performance_evaluation, filter_field_s=['mean_loss'], exclude=False)}")
+
+    suffix = 'killme'
+    train_suffix = suffix
+    model_suffix = config_suffix
+    model_name_suffix = f"{net_cpu_empty.__class__.__module__.split('.')[-1].replace('__', '')}__{train_suffix}-{str(model_suffix)}-EP0"
+
+    write_model(net.cpu(), model_name_suffix=model_name_suffix)
+    net_inference = read_net_inference(model_name_suffix)
+
+    IModelBase.test_single_inference(net_inference)
+
+    print(f'!!!TEST {model_name_suffix} PASSED!!!')
+    os.remove(f'{MODEL_FOLDER_PATH()}/{model_name_suffix}.pt')
+    sys.stdout.flush()
 
 
 def run_resource_monitor(interval_secs=60):
@@ -2664,6 +2741,33 @@ def ENV_INT_LESS_THAN(env_key, default):
         return default
 
 
+def remove_web_app_out_caches(ext_log_s=None):
+    with log_context(CONSOLE_SPLITTED) as log_s:
+        backtesting_out_folder = f"{project_root_dir()}/OUT/BACKTESTING"
+        backtesting_net_folder_s = {
+            f for f in os.listdir(backtesting_out_folder)
+            if os.path.isdir(os.path.join(backtesting_out_folder, f))
+        }
+
+        autotrading_out_folder = f"{project_root_dir()}/OUT/AUTOTRADING"
+        autotrading_net_folder_s = {
+            f for f in os.listdir(autotrading_out_folder)
+            if os.path.isdir(os.path.join(backtesting_out_folder, f))
+        }
+
+        web_app_out_cache_html_folder_path = f"{project_root_dir()}/OUT/WEBAPP/dashboard/html"
+        web_app_out_cache_img_folder_path = f"{project_root_dir()}/OUT/WEBAPP/dashboard/img"
+
+        for target_dir in [web_app_out_cache_html_folder_path, web_app_out_cache_img_folder_path]:
+            for filename in os.listdir(target_dir):
+                target_path = os.path.join(target_dir, filename)
+                filename_without_ext = os.path.splitext(filename)[0]
+                if filename_without_ext not in [*backtesting_net_folder_s, *autotrading_net_folder_s]:
+                    if os.path.isfile(target_path):
+                        os.remove(target_path)
+                        ext_log_s.append(f"REMOVED WEB APP CACHE FILE: {target_path}")
+
+
 def TEST__MERGE_DICTS():
     origin_dict = {
         'name': 'Jhon',
@@ -2699,8 +2803,6 @@ def TEST__MERGE_DICTS():
 
 
 def TEST__PARAMETRIC_LRU_CACHE():
-    import time
-
     @parametric_lru_cache(lambda d: "|".join([i['key1'] for i in d]), maxsize=1)
     def calculate_data(data):
         result = [*(x for d in data for x in d['key3'])]

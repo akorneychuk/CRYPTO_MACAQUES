@@ -392,12 +392,6 @@ def generate_color_s(count):
 
 	return color_s
 
-BINANCE_API_KEY = "9uqfsmoZt2fBZH4FFHfVzOyZk1FyyOZVVqaO87yBAvHv9iCMPPTJQ2pzpbG2Xj3D"
-BINANCE_API_SECRET = "qZM6TnMZQVZ0bh9zbFPapsqmplDhYllbLTnqtStya1P0xb6FR4GO6ZgSjW38JADD"
-
-OKX_API_KEY = '8e140dd1-9310-464f-919a-a3c8acd22685'
-OKX_API_SECRET_KEY = '29A908D5D6005CE946671D1AB8670565'
-OKX_API_PASSPHRASE = 'Dx=xR^7hi<IPZ?f'
 
 STATE_IN = "IN"
 STATE_OUT = "OUT"
@@ -406,7 +400,7 @@ ACTION_BUY = "BUY"
 ACTION_SELL = "SELL"
 ACTION_NO = "NO"
 
-KIEV_UTC_HOURS_DIFF = 2
+KIEV_UTC_HOURS_DIFF = int(datetime.now(pytz.timezone("Europe/Kyiv")).utcoffset().total_seconds() / 3600 )
 
 KIEV_TZ = pytz.timezone(f'Etc/GMT-{KIEV_UTC_HOURS_DIFF}')
 UTC_TZ = pytz.timezone('Etc/GMT')
@@ -466,12 +460,13 @@ __DD_CL = lambda threshold: f'dd_cl_{threshold}'
 __DIST = lambda threshold: f'dist_{threshold}'
 __DIST_CL = lambda threshold: f'dist_cl_{threshold}'
 
+__PTP = lambda threshold, plr: f'ptp_{threshold}_{plr}'
 __TPR = lambda threshold: f'tpr_{threshold}'
 __TPR_NORM = lambda threshold: f'tpr_norm_{threshold}'
 
 _PLOT_ENABLED = 'PLOT_ENABLED'
 
-MAX_FEATURE_NAN_START_COUNT = lambda: 42
+MAX_FEATURE_NAN_START_COUNT = lambda: 50
 
 DISCRET_5M = '5M'
 DISCRET_15M = '15M'
@@ -484,6 +479,8 @@ _CPU_COUNT = 'CPU_COUNT'
 _WORKERS_COUNT = 'WORKERS_COUNT'
 _TRAIN_REGIME = 'TRAIN_REGIME'
 _NORM_CONF_MTX = 'NORM_CONF_MTX'
+_CLASS_TENSOR_WEIGHTS = 'CLASS_TENSOR_WEIGHTS'
+_POS_TENSOR_WEIGHTS = 'POS_TENSOR_WEIGHTS'
 
 _SYMBOL_JOIN = 'SYMBOL'
 _SYMBOL_SLASH = 'SYMBOL_SLASH'
@@ -590,7 +587,7 @@ def _SUB_FOLDER_SEGMENT_CACHED(net_folder):
 
 
 def _SUB_FOLDER_SEGMENT(net_folder=None):
-	net_folder = net_folder if net_folder is not None else os.environ[_NET_FOLDER]
+	net_folder = net_folder if net_folder is not None else os.environ[_NET_FOLDER] if _NET_FOLDER in os.environ else os.environ['NET_FOLDER']
 	sub_folder_segment = _SUB_FOLDER_SEGMENT_CACHED(net_folder)
 
 	return sub_folder_segment
