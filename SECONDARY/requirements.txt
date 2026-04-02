@@ -31,9 +31,9 @@ tabulate
 ipython
 ipynbname
 
-torch==2.0.1 
-torchvision 
-torchaudio
+#torch==2.0.1 
+#torchvision 
+#torchaudio
 
 tradingview-ta
 
