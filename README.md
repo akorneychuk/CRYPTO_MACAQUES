@@ -48,4 +48,16 @@
 
 6) RUN backtesting presenter in Jupyter notebook: 
     
-    ***Open and Play all of backtesting_presenter.ipynb***
+    Open and Play all of backtesting_presenter.ipynb
+
+
+6) RUN evaluation Jupyter notebook: 
+
+    a) Run symbol to many models:
+        Open and Play all of evaluate_symbol_models_bulk.ipynb
+    
+    b) Run model to many symbols:
+        Open and Play all of evaluate_model_symbols_bulk.ipynb
+
+    c) Run many symbols to many models:
+        Open and Play all of evaluate_symbols_models_bulk.ipynb
