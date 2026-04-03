@@ -1254,7 +1254,7 @@ def fetch_dirty(market_type, symbol, discretization, start_dt: datetime=None, en
     df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
 
     try:
-        df = featurize_lambda(df, 'close_time', _UTC_TIMESTAMP, lambda ts: datetime.fromtimestamp(ts / 1000).astimezone(UTC_TZ) + timedelta(milliseconds=1))
+        df = featurize_lambda(df, 'open_time', _UTC_TIMESTAMP, lambda ts: datetime.fromtimestamp(ts / 1000).astimezone(UTC_TZ))
 
         df = featurize_lambda(df, 'open_time', f"open_{_UTC_TIMESTAMP}", lambda ts: datetime.fromtimestamp(ts / 1000).astimezone(UTC_TZ))
         df = featurize_lambda(df, 'close_time', f"close_{_UTC_TIMESTAMP}", lambda ts: datetime.fromtimestamp(ts / 1000).astimezone(UTC_TZ))
