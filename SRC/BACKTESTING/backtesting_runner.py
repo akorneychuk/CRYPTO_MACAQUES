@@ -8,7 +8,7 @@ from SRC.CORE.debug_utils import is_running_under_pycharm, SET_SYMBOL
 from SRC.LIBRARIES.new_data_utils import fetch_featurize_group_iterate
 from SRC.LIBRARIES.new_utils import floor, __uuid4_12 as uuid4_12, produce_net_folder, INITIALIZE_NETFOLDER, parse_net_folder_hashed, write_datetime_price_candle
 from SRC.NN.IModelBase import produce_model
-from SRC.WEBAPP.TESTS.test_margin_dashboard_trades_executor_new import produce_mock_margin_isolated_binance_client_singleton
+from SRC.TESTS.test_margin_dashboard_trades_executor_new import produce_mock_margin_isolated_binance_client_singleton
 from SRC.WEBAPP.libs.BinanceMarginIsolatedTrader import trade_utils_producer
 
 

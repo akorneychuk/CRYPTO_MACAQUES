@@ -3,7 +3,7 @@ from SRC.NN.S_Base import S_Base
 
 
 class NN(S_Base):
-    def predict_signal(self, group):
+    def predict_(self, group):
         volume_grad_diff_9_0 = group[0].iloc[-1]['volume_grad_diff_9']
 
         if volume_grad_diff_9_0 > 0.5:
