@@ -2,7 +2,7 @@ from dateutil import parser
 
 from SRC.CORE.utils import hashablelist
 from SRC.LIBRARIES.new_data_utils import fetch_featurize_all, read_group_df, get_group_constraints_df, produce_differential, fecth_klines_retry
-from SRC.LIBRARIES.new_utils import produce_inference_model
+from SRC.NN.IModelBase import produce_model
 
 
 def fetch_data(market_type, symbol, start_dt_str):
@@ -30,7 +30,7 @@ def fetch_data(market_type, symbol, start_dt_str):
 def prepare_data(model_name, df_origin_s, group_df, start_dt_str):
     start_dt = parser.parse(start_dt_str)
 
-    model = produce_inference_model(model_name)
+    model = produce_model(model_name)
     segments = model.segments_count()
     threshold = model.threshold()
 
