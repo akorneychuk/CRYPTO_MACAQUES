@@ -3,14 +3,14 @@ from abc import ABC
 from abc import abstractmethod
 from datetime import datetime
 
-from SRC.CORE._CONSTANTS import UTC_TZ, _MARGIN, _BINANCE_FEE
+from SRC.CORE._CONSTANTS import UTC_TZ, _MARGIN, _BINANCE_FEE, _LONG, _SHORT
 from SRC.LIBRARIES.new_data_utils import fetch_featurize_realtime_group_all
 from SRC.LIBRARIES.time_utils import TIME_DELTA, round_down_to_nearest_step
 
 
 class IModelBase(ABC):
     @abstractmethod
-    def predict_signal(self, group):
+    def predict_(self, group):
         pass
 
     @abstractmethod
@@ -33,6 +33,26 @@ class IModelBase(ABC):
     def discretization_meta_feature_s(self) -> []:
         pass
 
+    def produce_rped_tpr(self, prediction):
+        signal, take_profit_ratio = prediction['signal'], prediction['take_profit_ratio']
+        rel_tpr = take_profit_ratio - 1
+        if signal == _LONG:
+            pred_tpr = rel_tpr
+
+            return pred_tpr
+        if signal == _SHORT:
+            pred_tpr = -rel_tpr
+
+            return pred_tpr
+
+        return 0
+
+    def predict_signal(self, group):
+        prediction = self.predict_(group)
+        prediction['pred_tpr'] = self.produce_rped_tpr(prediction)
+
+        return prediction
+
     @staticmethod
     def test_single_inference(net):
         # symbols = "DOGEUSDT|NKNUSDT|XECUSDT|THETAUSDT|DEGOUSDT|GNSUSDT|KMNOUSDT|SLPUSDT|TSTUSDT|PEOPLEUSDT|PHBUSDT"
@@ -49,7 +69,6 @@ class IModelBase(ABC):
 
             pred_label = net.predict_signal(input_group)
             print(f"{symbol} >> {pred_label}")
-
 
 
 def produce_model(model_name) -> IModelBase:

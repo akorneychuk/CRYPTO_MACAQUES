@@ -40,7 +40,7 @@ tradingview-ta
 psutil
 pyspark==3.5.6
 pyspark.pandas
-numpy==1.26.4
+numpy==1.24.4
 pyarrow
 PyArrow
 python-dateutil
