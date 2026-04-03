@@ -7,9 +7,10 @@
     ***. venv/bin/activate && pip install jupyter lab***
 
 3) START Jupyter lab:
-
     ***. venv/bin/activate && nohup jupyter lab &***
+
     ***. venv/bin/activate &&  jupyter notebook list***
+
     ***COPY LINK OPEN IN BROWSER***
 
 4) RUN backtesting excutor in console: 
