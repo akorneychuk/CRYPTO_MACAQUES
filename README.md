@@ -51,7 +51,8 @@
     Open and Play all of backtesting_presenter.ipynb
 
 
-6) RUN evaluation Jupyter notebook: 
+6) RUN evaluation Jupyter notebook [We need also install python 3.8.x + pip install zigzag]: 
+    ***. venv38/bin/activate && pip install zigzag***
 
     a) Run symbol to many models:
         Open and Play all of evaluate_symbol_models_bulk.ipynb

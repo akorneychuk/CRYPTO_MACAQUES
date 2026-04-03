@@ -27,12 +27,11 @@ def fetch_data(market_type, symbol, start_dt_str):
     }
 
 
-def prepare_data(model_name, df_origin_s, group_df, start_dt_str):
+def prepare_data(model_name, threshold, df_origin_s, group_df, start_dt_str):
     start_dt = parser.parse(start_dt_str)
 
     model = produce_model(model_name)
     segments = model.segments_count()
-    threshold = model.threshold()
 
     df_s = [df_origin.copy() for df_origin in df_origin_s]
     df_s[0] = produce_differential(df_s[0], threshold, include_existing_features=True, print_out=True)
@@ -43,5 +42,4 @@ def prepare_data(model_name, df_origin_s, group_df, start_dt_str):
         'group_constraints_df': group_constraints_df,
         'model': model,
         'segments': segments,
-        'threshold': threshold,
     }

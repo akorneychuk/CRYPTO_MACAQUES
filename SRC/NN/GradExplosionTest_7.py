@@ -23,5 +23,6 @@ class NN(S_Base):
     def discretization_feature_s(self):
         return {
             '15M': {
+                'volume_grad_diff_9'
             }
         }
