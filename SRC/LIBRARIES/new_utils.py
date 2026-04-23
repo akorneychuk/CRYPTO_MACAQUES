@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import threading
+import ta
 import time
 import traceback
 import uuid
@@ -66,6 +67,210 @@ def set_without_reordering(input_list):
 
     return result_set
 
+def mrc_supersmoother(src, length):
+    """
+    Supersmoother filter by John Ehlers
+    """
+    a1 = np.exp(-1.414 * np.pi / length)
+    b1 = 2 * a1 * np.cos(1.414 * np.pi / length)
+    c3 = -a1 * a1
+    c2 = b1
+    c1 = 1 - c2 - c3
+
+    ss = np.zeros_like(src)
+    ss[:2] = src[:2]
+
+    for i in range(2, len(src)):
+        ss[i] = c1 * src[i] + c2 * ss[i-1] + c3 * ss[i-2]
+
+    return ss
+
+def mrc_sak_filter(filter_type, src, length):
+    """
+    Ehlers Swiss Army Knife filters
+    """
+    pi = np.pi
+    cycle = 2 * pi / length
+
+    c0, c1 = 1.0, 0.0
+    b0, b1, b2 = 1.0, 0.0, 0.0
+    a1, a2 = 0.0, 0.0
+    alpha, beta, gamma = 0.0, 0.0, 0.0
+
+    if filter_type == "Ehlers EMA":
+        alpha = (np.cos(cycle) + np.sin(cycle) - 1) / np.cos(cycle)
+        b0 = alpha
+        a1 = 1 - alpha
+
+    elif filter_type == "Gaussian":
+        beta = 2.415 * (1 - np.cos(cycle))
+        alpha = -beta + np.sqrt(beta * beta + 2 * beta)
+        c0 = alpha * alpha
+        a1 = 2 * (1 - alpha)
+        a2 = -(1 - alpha) * (1 - alpha)
+
+    elif filter_type == "Butterworth":
+        beta = 2.415 * (1 - np.cos(cycle))
+        alpha = -beta + np.sqrt(beta * beta + 2 * beta)
+        c0 = alpha * alpha / 4
+        b1, b2 = 2, 1
+        a1 = 2 * (1 - alpha)
+        a2 = -(1 - alpha) * (1 - alpha)
+
+    elif filter_type == "BandStop":
+        beta = np.cos(cycle)
+        gamma = 1 / np.cos(cycle * 2 * 0.1)  # delta = 0.1
+        alpha = gamma - np.sqrt(gamma * gamma - 1)
+        c0 = (1 + alpha) / 2
+        b1 = -2 * beta
+        b2 = 1
+        a1 = beta * (1 + alpha)
+        a2 = -alpha
+
+    elif filter_type == "SMA":
+        c1 = 1 / length
+        b0 = 1 / length
+        a1 = 1
+
+    elif filter_type == "EMA":
+        alpha = 2 / (length + 1)
+        b0 = alpha
+        a1 = 1 - alpha
+
+    elif filter_type == "RMA":
+        alpha = 1 / length
+        b0 = alpha
+        a1 = 1 - alpha
+
+    output = np.zeros_like(src)
+    output[:3] = src[:3]
+
+    for i in range(3, len(src)):
+        output[i] = (c0 * (b0 * src[i] +
+                          b1 * (src[i-1] if i-1 >= 0 else 0) +
+                          b2 * (src[i-2] if i-2 >= 0 else 0)) +
+                    a1 * output[i-1] +
+                    a2 * output[i-2] -
+                    c1 * (src[i-length] if i-length >= 0 else 0))
+
+    return output
+
+def add_mrc_indicators(df, source_type='hlc3', filter_type='SuperSmoother',
+                       length=200, innermult=1.0, outermult=2.415):
+    """
+    Добавляет в DataFrame колонки MRC (meanline, upband1, loband1, upband2, loband2).
+    Работает без побочных эффектов и глобальных переменных.
+
+    Parameters:
+    df : pandas.DataFrame - должен содержать колонки 'open', 'high', 'low', 'close'
+    source_type : 'hlc3', 'ohlc4', 'close'
+    filter_type : тип фильтра (например, 'SuperSmoother')
+    length : период (по умолчанию 200)
+    innermult : множитель для внутреннего канала
+    outermult : множитель для внешнего канала
+
+    Returns:
+    pandas.DataFrame с добавленными колонками:
+        'meanline', 'meanrange', 'upband1', 'loband1', 'upband2', 'loband2'
+    """
+    import math
+    import numpy as np
+
+    df = df.copy()  # работаем с копией, чтобы не изменять оригинал
+
+    # Вычисляем источник
+    if source_type == 'hlc3':
+        source = (df['high'] + df['low'] + df['close']) / 3
+    elif source_type == 'ohlc4':
+        source = (df['open'] + df['high'] + df['low'] + df['close']) / 4
+    else:
+        source = df['close']
+
+    source_vals = source.values
+
+    # Истинный диапазон
+    tr = np.maximum(
+        df['high'] - df['low'],
+        np.maximum(
+            (df['high'] - df['close'].shift(1)).abs(),
+            (df['low'] - df['close'].shift(1)).abs()
+        )
+    ).fillna(0).values
+
+    # Применяем фильтр
+    if filter_type == 'SuperSmoother':
+        meanline = mrc_supersmoother(source_vals, length)
+        meanrange = mrc_supersmoother(tr, length)
+    else:
+        meanline = mrc_sak_filter(filter_type, source_vals, length)
+        meanrange = mrc_sak_filter(filter_type, tr, length)
+
+    pi = np.pi
+    mult = pi * innermult
+    mult2 = pi * outermult
+
+    df['meanline'] = meanline
+    df['meanrange'] = meanrange
+    df['upband1'] = meanline + meanrange * mult
+    df['loband1'] = meanline - meanrange * mult
+    df['upband2'] = meanline + meanrange * mult2
+    df['loband2'] = meanline - meanrange * mult2
+
+    return df
+
+def mrc_calculate(mrc_df, df, source_type='hlc3', filter_type='SuperSmoother', innermult=1.0, outermult=2.415):
+    mrc_df = add_mrc_indicators(mrc_df, source_type, filter_type, 200, innermult, outermult)
+    # Переносим только нужную часть в df
+    for col in ['meanline', 'meanrange', 'upband1', 'loband1', 'upband2', 'loband2']:
+        df[col] = mrc_df.loc[df.index, col]
+
+    return mrc_df
+
+# Функция для подготовки данных с буфером
+def prepare_buffer_data(df_main, df_display, buffer_size):
+    combined = pd.concat([df_main.iloc[-(buffer_size + len(df_display)):], df_display])
+    combined = combined[~combined.index.duplicated(keep='last')].sort_index()
+    return combined
+
+def rsi(df, rsi_calc_df):
+    df['rsi'] = ta.momentum.RSIIndicator(close=rsi_calc_df['close'], window=14).rsi().loc[df.index]
+
+    return df
+
+def stochastic_tradingview(df, stoch_calc_df, periodK=14, smoothK=3, periodD=3):
+    lowest_low = stoch_calc_df['low'].rolling(window=periodK).min()
+    highest_high = stoch_calc_df['high'].rolling(window=periodK).max()
+    raw_k = 100 * (stoch_calc_df['close'] - lowest_low) / (highest_high - lowest_low)
+    stoch_k = raw_k.rolling(window=smoothK).mean()
+    stoch_d = stoch_k.rolling(window=periodD).mean()
+    df['stoch_k'] = stoch_k.loc[df.index]
+    df['stoch_d'] = stoch_d.loc[df.index]
+
+    return df
+
+def macd(df, macd_calc_df):
+    macd = ta.trend.MACD(
+        close=macd_calc_df['close'],
+        window_slow=26,
+        window_fast=12,
+        window_sign=9
+    )
+    df['macd_line'] = macd.macd().loc[df.index]
+    df['macd_signal'] = macd.macd_signal().loc[df.index]
+    df['macd_histogram'] = macd.macd_diff().loc[df.index]
+
+    return df, macd
+
+def atr(df, atr_calc_df):
+    atr_full = ta.volatility.AverageTrueRange(
+        high=atr_calc_df['high'],
+        low=atr_calc_df['low'],
+        close=atr_calc_df['close'],
+        window=14
+    ).average_true_range()
+    df['atr'] = atr_full.loc[df.index]
+
+    return df
 
 def plot_evaluated_model(train_config, plot_data_queue, initial_validation_data, train_validation_data, final_validation_data, train_loss_s, test_loss_s, train_validation_s, test_validation_s, epochs_count, epoch_exec_time_s, current_exec_time_seconds, started_at, is_finished=False):
     last_updated_at = kiev_now()
