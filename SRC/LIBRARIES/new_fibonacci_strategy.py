@@ -1,4 +1,4 @@
-
+import os
 import math
 from datetime import datetime, timedelta
 from uuid import uuid4
@@ -10,11 +10,99 @@ from SRC.CORE._CONSTANTS import _UTC_TIMESTAMP, _KIEV_TIMESTAMP, project_root_di
 from SRC.LIBRARIES.new_data_utils import fetch
 from SRC.LIBRARIES.new_plot_utils import display_df_full
 from SRC.LIBRARIES.time_utils import TIME_DELTA, as_utc_tz
+import LIBRARIES.new_fibonacci_mrc_utils as nfmu
 
+def is_last_candle_target(df, window=10, measure_percentile=0.4, use_candle_size_instead_of_shadow=True, filter_by_measure_range=False, measure_lower_mult=0.5, measure_upper_mult=2.0, use_mrc=True, use_mrc_r2=True, use_mrc_s2=True):
+    """
+    Определяет, является ли последняя свеча в DataFrame целевой.
 
-def is_target_candle(df_window): #TODO: Window has 1000 candles, last candle is tagert or not > True or False
-    pass
+    Параметры:
+    df : pandas.DataFrame с колонками 'open', 'high', 'low', 'close', 'volume'
+          Должен содержать минимум window+1 свечей (рекомендуется 1000)
+    window : период для скользящих расчётов (10)
+    measure_percentile : порог перцентиля (0.8 = 80-й перцентиль)
+    use_candle_size_instead_of_shadow : если True, используем свечной размах (high-low); иначе максимальную тень
+    filter_by_measure_range : если True, дополнительно фильтруем по диапазону относительно скользящего среднего
+    measure_lower_mult, measure_upper_mult : множители для диапазона
+    use_mrc : использовать ли фильтр MRC
+    use_mrc_r2, use_mrc_s2 : учитывать ли касания R2 и/или S2
 
+    Возвращает:
+    bool : True, если последняя свеча удовлетворяет всем критериям
+    """
+    if len(df) < window + 1:
+        return False
+
+    # Копируем, чтобы не портить исходный DataFrame
+    df = df.copy()
+
+    # Если нужно, добавляем MRC индикаторы
+    if use_mrc:
+        df = nfmu.add_mrc_indicators(df, length=200)  # используем длину 200 как в mrc_calculate
+
+    # Рассчитываем объёмный перцентиль (по предыдущим свечам)
+    df['volume_percentile'] = df['volume'].shift(1).rolling(window=window, min_periods=1).quantile(measure_percentile)
+
+    # Рассчитываем меру (размах свечи или максимальная тень)
+    if use_candle_size_instead_of_shadow:
+        df['measure'] = df['high'] - df['low']
+    else:
+        df['upper_shadow'] = df['high'] - df[['open', 'close']].max(axis=1)
+        df['lower_shadow'] = df[['open', 'close']].min(axis=1) - df['low']
+        df['measure'] = df[['upper_shadow', 'lower_shadow']].max(axis=1)
+
+    # Перцентиль меры по предыдущим свечам
+    df['measure_percentile'] = df['measure'].shift(1).rolling(window=window, min_periods=1).quantile(measure_percentile)
+
+    # Скользящее среднее меры для фильтрации по диапазону
+    if filter_by_measure_range:
+        df['measure_avg'] = df['measure'].shift(1).rolling(window=window, min_periods=1).mean()
+
+    # Берём последнюю свечу
+    last = df.iloc[-1]
+    idx = len(df) - 1  # индекс последней строки
+
+    os.system('say Hello! I am the Nippel System. Who are you? Sergei Ilon Mask or Andrey Pidaras?')
+
+    # Условие: достаточно ли данных для расчёта (idx >= window)
+    if idx < window:
+        return False
+
+    # Касание уровней MRC (если используется)
+    if use_mrc:
+        if 'upband2' not in last or 'loband2' not in last:
+            return False
+        r2 = last['upband2']
+        s2 = last['loband2']
+        high = last['high']
+        low = last['low']
+
+        touches_r2 = (high >= r2 and low <= r2) or (low > r2)
+        touches_s2 = (high >= s2 and low <= s2) or (high < s2)
+        touches_level = (use_mrc_r2 and touches_r2) or (use_mrc_s2 and touches_s2)
+        if not touches_level:
+            return False
+
+    # Объём выше перцентиля
+    volume_ok = last['volume'] > df['volume_percentile'].iloc[idx]
+    if not volume_ok:
+        return False
+
+    # Мера выше перцентиля
+    measure_ok = last['measure'] > df['measure_percentile'].iloc[idx]
+    if not measure_ok:
+        return False
+
+    # Дополнительная фильтрация по диапазону
+    if filter_by_measure_range:
+        avg = df['measure_avg'].iloc[idx]
+        if not pd.isna(avg):
+            low_bound = avg * measure_lower_mult
+            high_bound = avg * measure_upper_mult
+            if not (low_bound <= last['measure'] <= high_bound):
+                return False
+
+    return True
 
 def is_target_candle_killme(last_closed_min_row, discretization, df_window): #Window has 1000 candles, last candle is tagert or not > True or False
     each_ns = 7
