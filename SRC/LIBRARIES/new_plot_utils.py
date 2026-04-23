@@ -2028,5 +2028,15 @@ def show__plot_data(model_name_suffix):
     display(Image(filename=img_path))
 
 
+def display_df_full(df):
+    with pd.option_context(
+            'display.max_rows', None,
+            'display.max_columns', None,
+            'display.max_colwidth', None,
+            'display.width', None
+    ):
+        display(df)
+
+
 if __name__ == "__main__":
     show__plot_data(model_name_suffix='CC2_x14_71__IMP1')
