@@ -1,10 +1,10 @@
 import plotly.graph_objects as go
 from SRC.CORE._CONSTANTS import _KIEV_TIMESTAMP
 import pandas as pd
-from LIBRARIES.time_utils import as_kiev_tz
+from SRC.LIBRARIES.time_utils import as_kiev_tz
 from SRC.CORE.utils import featurize_lambda
 from SRC.CORE._CONSTANTS import _UTC_TIMESTAMP
-import LIBRARIES.new_fibonacci_statistics_utils as nfsu
+import SRC.LIBRARIES.new_fibonacci_statistics_utils as nfsu
 from plotly.subplots import make_subplots
 
 def get_display_timeframe(trading_timeframe):

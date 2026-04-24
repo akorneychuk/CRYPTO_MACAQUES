@@ -10,7 +10,7 @@ from SRC.CORE._CONSTANTS import _UTC_TIMESTAMP, _KIEV_TIMESTAMP, project_root_di
 from SRC.LIBRARIES.new_data_utils import fetch
 from SRC.LIBRARIES.new_plot_utils import display_df_full
 from SRC.LIBRARIES.time_utils import TIME_DELTA, as_utc_tz
-import LIBRARIES.new_fibonacci_mrc_utils as nfmu
+from SRC.LIBRARIES import new_utils as nu
 
 def is_last_candle_target(df, window=10, measure_percentile=0.4, use_candle_size_instead_of_shadow=True, filter_by_measure_range=False, measure_lower_mult=0.5, measure_upper_mult=2.0, use_mrc=True, use_mrc_r2=True, use_mrc_s2=True):
     """
@@ -38,7 +38,7 @@ def is_last_candle_target(df, window=10, measure_percentile=0.4, use_candle_size
 
     # Если нужно, добавляем MRC индикаторы
     if use_mrc:
-        df = nfmu.add_mrc_indicators(df, length=200)  # используем длину 200 как в mrc_calculate
+        df = nu.add_mrc_indicators(df, length=200)  # используем длину 200 как в mrc_calculate
 
     # Рассчитываем объёмный перцентиль (по предыдущим свечам)
     df['volume_percentile'] = df['volume'].shift(1).rolling(window=window, min_periods=1).quantile(measure_percentile)
