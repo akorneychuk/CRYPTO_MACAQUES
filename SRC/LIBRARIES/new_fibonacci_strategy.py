@@ -160,6 +160,12 @@ class TargetCandle:
         self.dismiss_price = trigger_candle['close'] * dismiss_multiplier
         self.is_dismissed = False
 
+    def is_dismissed(self):
+        return self.is_dismissed
+
+    def is_inprogress(self):
+        return len(self.entered_level_s) > 0
+
     def is_active(self):
         is_running = len(self.entered_level_s) == 0 or any(transaction['status'] == 'ENTERED' for transaction in self.entered_level_s)
         is_active = is_running and not self.is_dismissed
@@ -441,7 +447,11 @@ def run_signal_producer(init_data):
 
         closed_transactions_count = len(closed_transaction_s)
 
-    target_candles_info_str = f'TARGET CANDLES TOTAL: {len(strategy.target_candle_s)} | ALIVE: {len([tc for tc in strategy.target_candle_s if tc.is_active()])}'
+    target_candles_alive_count = len([tc for tc in strategy.target_candle_s if tc.is_active()])
+    target_candles_inprogress_count = len([tc for tc in strategy.target_candle_s if tc.is_inprogress()])
+    target_candles_dismissed_count = len([tc for tc in strategy.target_candle_s if tc.is_dismissed])
+    target_candles_info_str = f'TARGET CANDLES TOTAL: {len(strategy.target_candle_s)} | ALIVE: {target_candles_alive_count} | IN PROGRESS: {target_candles_inprogress_count} | DISMISSED: {target_candles_dismissed_count}'
+
     if len(transaction_s) > 0:
         transactions_df = pd.DataFrame(transaction_s).set_index('idx')
         transactions_df.to_csv(result_df_path)
