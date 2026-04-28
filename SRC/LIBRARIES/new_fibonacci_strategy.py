@@ -4,13 +4,16 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 
 import pandas as pd
+from SRC.CORE.debug_utils import CONSOLE_SPLITTED
 from dateutil import parser
 
-from SRC.CORE._CONSTANTS import _UTC_TIMESTAMP, _KIEV_TIMESTAMP, project_root_dir
+from SRC.CORE._CONSTANTS import _UTC_TIMESTAMP, _KIEV_TIMESTAMP, project_root_dir, BINANCE_TAKER_COMISSION, BINANCE_MAKER_COMISSION
 from SRC.LIBRARIES.new_data_utils import fetch
 from SRC.LIBRARIES.new_plot_utils import display_df_full
-from SRC.LIBRARIES.time_utils import TIME_DELTA, as_utc_tz
+from SRC.LIBRARIES.new_utils import create_folder_file
+from SRC.LIBRARIES.time_utils import TIME_DELTA, as_utc_tz, deterministic_int
 from SRC.LIBRARIES import new_utils as nu
+
 
 def is_last_candle_target(df, window=10, measure_percentile=0.4, use_candle_size_instead_of_shadow=True, filter_by_measure_range=False, measure_lower_mult=0.5, measure_upper_mult=2.0, use_mrc=True, use_mrc_r2=True, use_mrc_s2=True):
     """
@@ -62,7 +65,7 @@ def is_last_candle_target(df, window=10, measure_percentile=0.4, use_candle_size
     last = df.iloc[-1]
     idx = len(df) - 1  # индекс последней строки
 
-    os.system('say Hello! I am the Nippel System. Who are you? Sergei Ilon Mask or Andrey Pidaras?')
+    # os.system('say Hello! I am the Nippel System. Who are you? Sergei Ilon Mask or Andrey Pidaras?')
 
     # Условие: достаточно ли данных для расчёта (idx >= window)
     if idx < window:
@@ -104,12 +107,6 @@ def is_last_candle_target(df, window=10, measure_percentile=0.4, use_candle_size
 
     return True
 
-def is_target_candle_killme(last_closed_min_row, discretization, df_window): #Window has 1000 candles, last candle is tagert or not > True or False
-    each_ns = 7
-    is_target_candle = (last_closed_min_row[_UTC_TIMESTAMP].to_pydatetime() - as_utc_tz(datetime(1970, 1, 1))) % (TIME_DELTA(discretization) * each_ns) == timedelta(0)
-
-    return is_target_candle
-
 
 def calc_pnl_qty(side, entry_price, exit_price, quantity, entry_fee, exit_fee):
     if side == 'LONG':
@@ -130,7 +127,7 @@ def calc_pnl_qty(side, entry_price, exit_price, quantity, entry_fee, exit_fee):
 
 
 class TargetCandle:
-    def __init__(self, strategy, min_candle, target_candle):
+    def __init__(self, strategy, trigger_candle, target_candle):
         dismiss_multiplier = 1.005
 
         low = target_candle['low']
@@ -153,15 +150,21 @@ class TargetCandle:
         } for level in levels]
         general_stop_loss_price = all_level_prices[sl_level]
 
-        self.min_candle_s = [min_candle]
+        self.trigger_candle_s = [trigger_candle]
         self.entry_level_setup_s = entry_level_setup_s
         self.general_stop_loss_price = general_stop_loss_price
         self.correlation_id = uuid4().hex[:12]
         self.all_level_prices = all_level_prices
         self.all_levels = all_levels
         self.entered_level_s = []
-        self.dismiss_price = min_candle['close'] * dismiss_multiplier
+        self.dismiss_price = trigger_candle['close'] * dismiss_multiplier
         self.is_dismissed = False
+
+    def is_dismissed(self):
+        return self.is_dismissed
+
+    def is_inprogress(self):
+        return len(self.entered_level_s) > 0
 
     def is_active(self):
         is_running = len(self.entered_level_s) == 0 or any(transaction['status'] == 'ENTERED' for transaction in self.entered_level_s)
@@ -169,23 +172,25 @@ class TargetCandle:
 
         return is_active
 
-    def produce_signal(self, last_closed_min_row):
+    def produce_signal(self, trigger_candle):
         correlation_id = self.correlation_id
 
-        min_candle = last_closed_min_row.to_dict()
-        min_candle_high = min_candle['high']
-        min_candle_low = min_candle['low']
+        trigger_candle_idx = trigger_candle[_UTC_TIMESTAMP]
+        trigger_candle_close = trigger_candle['close']
+        trigger_candle_high = trigger_candle['high']
+        trigger_candle_low = trigger_candle['low']
 
-        if self.min_candle_s[-1][_UTC_TIMESTAMP] < min_candle[_UTC_TIMESTAMP]:
-            self.min_candle_s.append(min_candle)
+        if self.trigger_candle_s[-1][_UTC_TIMESTAMP] < trigger_candle[_UTC_TIMESTAMP]:
+            self.trigger_candle_s.append(trigger_candle)
 
         ignore_signal = {
+            'idx': trigger_candle_idx,
             'correlation_id': correlation_id,
             'transaction_id': uuid4().hex[:12],
             'signal': 'IGNORE',
         }
 
-        if min_candle_high >= self.dismiss_price and len(self.entered_level_s) == 0:
+        if trigger_candle_high >= self.dismiss_price and len(self.entered_level_s) == 0:
             self.is_dismissed = True
 
             return [ignore_signal]
@@ -194,12 +199,12 @@ class TargetCandle:
             transaction_id = entry_level_setup['transaction_id']
             entry_level = entry_level_setup['level']
             entry_weight = entry_level_setup['weight']
-            entry_part = 1 / entry_weight
             entry_price = entry_level_setup['price']
+            entry_part = 1 / entry_weight
             entry_idx = self.all_levels.index(entry_level)
 
             entered_level_transaction_id_s = [entered_level['transaction_id'] for entered_level in self.entered_level_s if entered_level['status'] == 'ENTERED']
-            if transaction_id not in entered_level_transaction_id_s and min_candle_low <= entry_price:
+            if transaction_id not in entered_level_transaction_id_s and trigger_candle_low <= entry_price:
                 general_stop_loss_price = self.general_stop_loss_price
 
                 exit_idx = entry_idx - 1
@@ -207,8 +212,8 @@ class TargetCandle:
                 exit_price = self.all_level_prices[exit_level]
 
                 take_profit_ratio = round(exit_price / entry_price, 4)
-                # stop_loss_ratio = round(entry_price / general_stop_loss_price, 4)
-                # profit_loss_ratio = round((take_profit_ratio - 1) / (entry_price / general_stop_loss_price - 1), 4)
+                stop_loss_ratio = round(entry_price / general_stop_loss_price, 4)
+                profit_loss_ratio = round((take_profit_ratio - 1) / (entry_price / general_stop_loss_price - 1), 4)
 
                 self.entered_level_s.append({
                     'transaction_id': transaction_id,
@@ -220,12 +225,14 @@ class TargetCandle:
                 })
 
                 return [{
+                    'idx': trigger_candle_idx,
                     'correlation_id': correlation_id,
                     'transaction_id': transaction_id,
                     'signal': 'LONG',
+                    'actual_entry_price': entry_price,
                     'take_profit_ratio': take_profit_ratio,
-                    # 'stop_loss_ratio': stop_loss_ratio,
-                    # 'profit_loss_ratio': profit_loss_ratio,
+                    'stop_loss_ratio': stop_loss_ratio,
+                    'profit_loss_ratio': profit_loss_ratio,
                     'stop_loss_price': general_stop_loss_price,
                     'part': entry_part,
                 }]
@@ -233,32 +240,33 @@ class TargetCandle:
         if len(self.entered_level_s) > 0:
             last_entered_level = self.entered_level_s[-1]
             last_entered_level_exit_price = last_entered_level['exit_price']
-            if min_candle_high >= last_entered_level_exit_price:
+            if trigger_candle_high >= last_entered_level_exit_price:
                 close_signal_s = []
                 for entered_level in self.entered_level_s:
                     if entered_level['transaction_id'] == last_entered_level['transaction_id']:
+                        entered_level['status'] = 'EXITED'
                         continue
 
                     transaction_id = entered_level['transaction_id']
                     entered_level['status'] = 'EXITED'
                     close_signal_s.append({
+                        'idx': trigger_candle_idx,
                         'correlation_id': correlation_id,
                         'transaction_id': transaction_id,
                         'signal': 'CLOSE',
+                        'actual_exit_price': last_entered_level_exit_price,
                     })
+
                 if len(close_signal_s) > 0:
                     return close_signal_s
                 else:
                     return [ignore_signal]
 
-            if min_candle_low <= self.general_stop_loss_price:
+            if trigger_candle_low <= self.general_stop_loss_price:
                 for entered_level in self.entered_level_s:
                     entered_level['status'] = 'EXITED'
 
         return [ignore_signal]
-
-    def calc_stats(self):
-        pass #Calculate here statistics
 
 
 class Strategy:
@@ -272,44 +280,50 @@ class Strategy:
         self.level_weights = {level: self.position_weights[idx] for idx, level in enumerate(self.levels)}
         self.sl_level = self.levels[-1] - 1.0
 
-    def produce_target_candle_if_match(self, last_closed_min_row, window):
-        # is_target_candle = is_target_candle(window)
-        is_target_candle = is_target_candle_killme(last_closed_min_row, self.discretization, window)
+    def produce_target_candle_if_match(self, trigger_candle, window):
+        is_target_candle = is_last_candle_target(window)
 
         if is_target_candle:
-            min_canlde = last_closed_min_row.to_dict()
             target_candle = window.iloc[-1].to_dict()
 
-            target_candle = TargetCandle(self, min_canlde, target_candle)
+            target_candle = TargetCandle(self, trigger_candle, target_candle)
             self.target_candle_s.append(target_candle)
 
-    def produce_signal_s(self, last_closed_min_row, target_window):
-        is_target_discretization = (last_closed_min_row[_UTC_TIMESTAMP].to_pydatetime() - as_utc_tz(datetime(1970, 1, 1))) % TIME_DELTA(self.discretization) == timedelta(0)
+    def produce_signal_s(self, trigger_candle, target_window):
+        is_target_discretization = (trigger_candle[_UTC_TIMESTAMP].to_pydatetime() - as_utc_tz(datetime(1970, 1, 1))) % TIME_DELTA(self.discretization) == timedelta(0)
         if is_target_discretization:
-            self.produce_target_candle_if_match(last_closed_min_row, target_window)
+            self.produce_target_candle_if_match(trigger_candle, target_window)
 
         signal_s = []
         active_target_candle_s = [target_candle for target_candle in self.target_candle_s if target_candle.is_active()]
         for target_candle in active_target_candle_s:
-            signals = target_candle.produce_signal(last_closed_min_row)
+            signals = target_candle.produce_signal(trigger_candle)
             signal_s.extend(signals)
 
         return signal_s
 
 
-def run_signal_producer():
-    symbol = 'BTCUSDT'
-    market_type = 'FUTURES'
-    discretization = '15M'
-    discretization_min = '1M'
-    start_dt_str = '2025-10-01'
-    candle_depo = 1000
-    entry_fee = 0.0004
-    exit_fee = 0.0004
+def run_signal_producer(init_data):
+    symbol = init_data['symbol']
+    market_type = init_data['market_type']
+    discretization = init_data['discretization']
+    discretization_min = init_data['discretization_min']
+    start_dt_str = init_data['start_dt_str']
+    candle_depo = init_data['candle_depo']
+    entry_fee = init_data['entry_fee']
+    exit_fee = init_data['exit_fee']
     side = 'LONG'
 
-    target_df_cache_path = f'{project_root_dir()}/killme__target_df__{symbol}__{market_type}__{discretization}__{start_dt_str}.csv'
-    min_df_cache_path = f'{project_root_dir()}/killme__min_df__{symbol}__{market_type}__{discretization_min}__{start_dt_str}.csv'
+    out_evaluation_folder_full_path = f'{project_root_dir()}/OUT/EVALUATION/FIBONACCI_STRATEGY'
+
+    target_df_cache_path = f'{out_evaluation_folder_full_path}/CACHE/{symbol}__{market_type}__{discretization}__{start_dt_str}.csv'
+    min_df_cache_path = f'{out_evaluation_folder_full_path}/CACHE/{symbol}__{market_type}__{discretization}__{start_dt_str}.csv'
+    result_df_path = f'{out_evaluation_folder_full_path}/{symbol}__{market_type}__{discretization}__{start_dt_str}.csv'
+
+    create_folder_file(target_df_cache_path)
+    create_folder_file(min_df_cache_path)
+    create_folder_file(result_df_path)
+
     try:
         # TODO: DON'T FORGET TO CLEAR CACHED DF`s ONCE CHANGED start_dt
         target_df = pd.read_csv(target_df_cache_path, index_col='timestamp', parse_dates=[_UTC_TIMESTAMP, _KIEV_TIMESTAMP], infer_datetime_format=True)
@@ -327,62 +341,81 @@ def run_signal_producer():
 
     target_window_size = 1000
     min_window_size = int(TIME_DELTA(discretization) / TIME_DELTA(discretization_min)) * target_window_size
+    closed_transactions_count = 0
     for i in range(min_window_size, len(min_df) + 1):
         min_window = min_df.iloc[i - min_window_size:i]
-        last_closed_min_row = min_window.iloc[-1]
-        min_candle = last_closed_min_row.to_dict()
-        min_candle_timestamp = min_candle[_UTC_TIMESTAMP]
+        trigger_candle = min_window.iloc[-1].to_dict()
+        trigger_candle_close = trigger_candle['close']
+        trigger_candle_high = trigger_candle['high']
+        trigger_candle_low = trigger_candle['low']
+        trigger_candle_idx = trigger_candle[_UTC_TIMESTAMP]
+
         target_window = target_df[target_df[_UTC_TIMESTAMP].isin(min_window[_UTC_TIMESTAMP])]
 
-        signal_s = strategy.produce_signal_s(last_closed_min_row, target_window)
+        signal_s = strategy.produce_signal_s(trigger_candle, target_window)
 
         for signal in signal_s:
             if signal['signal'] == 'LONG':
-                entry_price = min_candle['close']
+                actual_entry_price = signal['actual_entry_price']
+
                 take_profit_ratio = signal['take_profit_ratio']
                 stop_loss_ratio = signal['stop_loss_ratio']
                 part = signal['part']
 
-                profit_price = entry_price * take_profit_ratio
-                loss_price = entry_price / stop_loss_ratio
+                profit_price = actual_entry_price * take_profit_ratio
+                loss_price = actual_entry_price / stop_loss_ratio
 
-                quantity = round(candle_depo / part / entry_price, 6)
+                quantity = round(candle_depo / actual_entry_price / part, 6)
 
                 transaction_s.append({
-                    'idx': min_candle_timestamp,
+                    'idx': trigger_candle_idx,
                     'correlation_id': signal['correlation_id'],
                     'transaction_id': signal['transaction_id'],
-                    'entry_price': entry_price,
+                    'entry_price': actual_entry_price,
                     'profit_price': profit_price,
                     'loss_price': loss_price,
                     'quantity': quantity,
-                    'entry_timestamp': min_candle_timestamp,
-                    'status': 'ENTERED',
+                    'entry_timestamp': trigger_candle_idx,
+                    'status': 'OPENED',
                 })
             elif signal['signal'] == 'CLOSE':
                 transaction = [transaction for transaction in transaction_s if transaction['transaction_id'] == signal['transaction_id']][0]
 
                 quantity = transaction['quantity']
                 entry_price = transaction['entry_price']
-                exit_price = min_candle['close']
+                actual_exit_price = signal['actual_exit_price']
 
-                pnl = calc_pnl_qty(side, entry_price, exit_price, quantity, entry_fee, exit_fee)
+                pnl = calc_pnl_qty(side, entry_price, actual_exit_price, quantity, entry_fee, exit_fee)
                 transaction['gross_pnl'] = pnl['gross_pnl']
                 transaction['total_fee'] = pnl['total_fee']
                 transaction['net_pnl'] = pnl['net_pnl']
-                transaction['exit_timestamp'] = min_candle_timestamp,
-                transaction['status'] = 'EXITED'
+                transaction['exit_timestamp'] = trigger_candle_idx
+                transaction['status'] = 'INTERRUPTED'
+                transaction['result'] = 'LOSS'
 
-        entered_transaction_s = [transaction for transaction in transaction_s if transaction['status'] == 'ENTERED']
-        for transaction in entered_transaction_s:
-            if min_candle['high'] >= transaction['profit_price']:
-                exit_price = transaction['profit_price']
-                status = 'PROFIT'
-            elif min_candle['low'] <= transaction['loss_price']:
-                exit_price = transaction['loss_price']
-                status = 'LOSS'
+        opened_transaction_s = [transaction for transaction in transaction_s if transaction['status'] == 'OPENED']
+        for transaction in opened_transaction_s:
+            profit_price = transaction['profit_price']
+            loss_price = transaction['loss_price']
+
+            if deterministic_int(trigger_candle_idx) % 2 == 0:
+                if trigger_candle_high >= profit_price:
+                    exit_price = profit_price
+                    result = 'PROFIT'
+                elif trigger_candle_low <= loss_price:
+                    exit_price = loss_price
+                    result = 'LOSS'
+                else:
+                    continue
             else:
-                continue
+                if trigger_candle_low <= loss_price:
+                    exit_price = loss_price
+                    result = 'LOSS'
+                elif trigger_candle_high >= profit_price:
+                    exit_price = profit_price
+                    result = 'PROFIT'
+                else:
+                    continue
 
             entry_price = transaction['entry_price']
             quantity = transaction['quantity']
@@ -391,14 +424,66 @@ def run_signal_producer():
             transaction['gross_pnl'] = pnl['gross_pnl']
             transaction['total_fee'] = pnl['total_fee']
             transaction['net_pnl'] = pnl['net_pnl']
-            transaction['exit_timestamp'] = min_candle_timestamp,
-            transaction['status'] = status
+            transaction['exit_timestamp'] = trigger_candle_idx
+            transaction['status'] = 'CLOSED'
+            transaction['result'] = result
 
-        print(f"Produced strategy signals: {signal_s}")
+        logs = [f'{str(trigger_candle_idx)}']
+        # if len(signal_s) > 0:
+        #     logs.append(f"PRODUCED SIGNALS: {list(reversed(signal_s))}")
 
-    transaction_df = pd.DataFrame(transaction_s).set_index('idx')
-    display_df_full(transaction_df.head(30))
+        # opened_transaction_s = [transaction for transaction in transaction_s if transaction['status'] == 'OPENED']
+        # if len(opened_transaction_s) > 0:
+        #     logs.append(f'OPENED TRANSACTION: {list(reversed(opened_transaction_s))}')
+
+        closed_transaction_s = [transaction for transaction in transaction_s if transaction['status'] != 'OPENED']
+        if len(closed_transaction_s) > 0:
+            logs.append(f'CLOSED TRANSACTION:')
+            for closed_transaction in closed_transaction_s[-10:]:
+                logs.append(f"  {closed_transaction}")
+
+        if len(logs) > 1 and len(closed_transaction_s) > closed_transactions_count:
+            CONSOLE_SPLITTED(*logs)
+
+        closed_transactions_count = len(closed_transaction_s)
+
+    target_candles_alive_count = len([tc for tc in strategy.target_candle_s if tc.is_active()])
+    target_candles_inprogress_count = len([tc for tc in strategy.target_candle_s if tc.is_inprogress()])
+    target_candles_dismissed_count = len([tc for tc in strategy.target_candle_s if tc.is_dismissed])
+    target_candles_info_str = f'TARGET CANDLES TOTAL: {len(strategy.target_candle_s)} | ALIVE: {target_candles_alive_count} | IN PROGRESS: {target_candles_inprogress_count} | DISMISSED: {target_candles_dismissed_count}'
+
+    if len(transaction_s) > 0:
+        transactions_df = pd.DataFrame(transaction_s).set_index('idx')
+        transactions_df.to_csv(result_df_path)
+
+        transactions_df = pd.read_csv(result_df_path, index_col='idx', parse_dates=['entry_timestamp', 'exit_timestamp'], infer_datetime_format=True)
+        total_gross_pnl = transactions_df['gross_pnl'].sum()
+        total_fee = transactions_df['total_fee'].sum()
+        total_net_pnl = transactions_df['net_pnl'].sum()
+
+        print(f"CLOSED TRANSACTIONS COUNT: {len(transaction_s)} | {target_candles_info_str}")
+        print(f"GROSS PNL: {total_gross_pnl:.2f} | TOTAL FEE: {total_fee:.2f} | NET PNL: {total_net_pnl:.2f}")
+        display_df_full(transactions_df.head(30))
+    else:
+        print(f"NO CLOSED TRANSACTIONS | {target_candles_info_str}")
 
 
 if __name__ == "__main__":
-    run_signal_producer()
+    os.environ['BINANCE_FEE'] = '0.036 - 0.036'
+
+    init_data = {}
+    init_data['symbol'] = 'ZECUSDT'
+    init_data['symbol'] = 'PEOPLEUSDT'
+    init_data['symbol'] = 'ZKCUSDT'
+    init_data['symbol'] = 'EPICUSDT'
+    init_data['symbol'] = 'CYBERUSDT'
+    init_data['symbol'] = 'PUMPUSDT'
+    init_data['market_type'] = 'FUTURES'
+    init_data['discretization'] = '1H'
+    init_data['discretization_min'] = '1M'
+    init_data['start_dt_str'] = '2025-09-01'
+    init_data['candle_depo'] = 1000
+    init_data['entry_fee'] = BINANCE_TAKER_COMISSION()
+    init_data['exit_fee'] = BINANCE_TAKER_COMISSION()
+
+    run_signal_producer(init_data)

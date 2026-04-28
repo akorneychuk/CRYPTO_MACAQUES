@@ -1,3 +1,4 @@
+import hashlib
 import random
 import re
 from contextlib import suppress
@@ -237,6 +238,13 @@ def utc_now_formatted():
 
 def kiev_now_formatted():
     return kiev_now().strftime("%Y-%m-%d %H:%M:%S%Z")
+
+
+def deterministic_int(dt):
+    s = dt.isoformat()  # важно: стабильное представление
+    h = hashlib.sha256(s.encode()).digest()
+
+    return int.from_bytes(h[:8], 'big')  # берём 64 бита
 
 
 def TEST_round_down_to_nearest_step():
