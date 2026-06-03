@@ -47,9 +47,9 @@ def add_central_line(row, fig, y=50, line_dash="dot"):
         row=row, col=1
     )
 
-def add_over_zones_and_a_central_line(row, fig):
-    add_over_zone(80, 100, "red", row, fig)
-    add_over_zone(0, 20, "green", row, fig)
+def add_over_zones_and_a_central_line(row, fig, overbought, oversold):
+    add_over_zone(overbought, 100, "red", row, fig)
+    add_over_zone(0, oversold, "green", row, fig)
     add_central_line(row, fig)
 
 def add_mrc(candlestick_row, fig, df):
@@ -69,17 +69,17 @@ def add_volume(df, volume_row, fig):
         df
     )
 
-def add_rsi(rsi_row, fig, df):
+def add_rsi(rsi_row, fig, df, overbought, oversold):
     add_scatter('rsi', "RSI", 'purple', rsi_row, fig, df)
-    add_over_zones_and_a_central_line(rsi_row, fig)
+    add_over_zones_and_a_central_line(rsi_row, fig, overbought, oversold)
 
 def add_stoch_scatter(speed, color, stoch_row, fig, df):
     add_scatter('stoch_' + speed, "Stoch %" + speed.capitalize(), color, stoch_row, fig, df)
 
-def add_stoch(stoch_row, fig, df):
+def add_stoch(stoch_row, fig, df, overbought, oversold):
     add_stoch_scatter('k', "lightblue", stoch_row, fig, df)
     add_stoch_scatter('d', "orange", stoch_row, fig, df)
-    add_over_zones_and_a_central_line(stoch_row, fig)
+    add_over_zones_and_a_central_line(stoch_row, fig, overbought, oversold)
 
 def add_macd(macd, df, macd_row, fig):
     full_histogram = macd.macd_diff()
