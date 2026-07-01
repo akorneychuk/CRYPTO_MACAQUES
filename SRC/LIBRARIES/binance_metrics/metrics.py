@@ -70,6 +70,6 @@ def _load_zip_dataframe(zip_path: Path) -> pd.DataFrame:
         with archive.open(csv_name) as file:
             df = pd.read_csv(file)
 
-    df[CREATE_TIME] = pd.to_datetime(df[CREATE_TIME])
+    df[CREATE_TIME] = pd.to_datetime(df[CREATE_TIME], utc=True).dt.floor("min")
 
     return df
