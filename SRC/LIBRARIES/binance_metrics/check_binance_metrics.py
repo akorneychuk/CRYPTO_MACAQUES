@@ -1,5 +1,5 @@
 from datetime import datetime
-from SRC.LIBRARIES.binance_metrics import load_metrics
+from SRC.LIBRARIES.binance_metrics import load_binance_metrics
 from SRC.LIBRARIES.binance_metrics.constants import *
 
 def main():
@@ -21,7 +21,7 @@ def main():
 
     print_header("TEST 1 - LOAD ALL COLUMNS")
 
-    df = load_metrics(symbol=SYMBOL, start_date=START_DATE, end_date=END_DATE)
+    df = load_binance_metrics(symbol=SYMBOL, start_date=START_DATE, end_date=END_DATE)
 
     print(df.head())
     print()
@@ -41,7 +41,7 @@ def main():
 
     print_header("TEST 2 - LOAD SELECTED COLUMNS")
 
-    df = load_metrics(
+    df = load_binance_metrics(
         symbol=SYMBOL,
         start_date=START_DATE,
         end_date=END_DATE,

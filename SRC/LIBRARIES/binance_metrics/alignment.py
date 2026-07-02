@@ -2,7 +2,7 @@ import pandas as pd
 from .constants import CREATE_TIME
 
 
-def attach_binance_metrics_for_15m(df_counter: pd.DataFrame,  metrics_df: pd.DataFrame) -> pd.DataFrame:
+def attach_binance_metrics_for_15m(df_counter: pd.DataFrame, metrics_df: pd.DataFrame) -> pd.DataFrame:
     df_counter = df_counter.copy()
     metrics_df = metrics_df.copy()
     metrics_df = metrics_df.set_index(CREATE_TIME, drop=False)

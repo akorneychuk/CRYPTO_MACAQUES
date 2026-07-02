@@ -3,11 +3,11 @@ from pathlib import Path
 from zipfile import ZipFile
 import pandas as pd
 from .constants import (CREATE_TIME, ZIP_COLUMNS)
-from .downloader import download_metrics
-from .storage import (find_missing_dates, list_zip_files_between)
+from .downloader import download_binance_metrics
+from .storage import (find_binance_metrics_missing_dates, list_binance_metrics_zip_files_between)
 
 
-def load_metrics(
+def load_binance_metrics(
     symbol: str,
     start_date: datetime,
     end_date: datetime,
@@ -18,10 +18,10 @@ def load_metrics(
         raise ValueError("start_date must be <= end_date")
 
     if auto_download:
-        missing_dates = find_missing_dates(symbol=symbol, start_date=start_date, end_date=end_date)
+        missing_dates = find_binance_metrics_missing_dates(symbol=symbol, start_date=start_date, end_date=end_date)
 
         if missing_dates:
-            failed = download_metrics(symbol=symbol, dates=missing_dates)
+            failed = download_binance_metrics(symbol=symbol, dates=missing_dates)
 
             if failed:
                 raise RuntimeError(
@@ -29,7 +29,7 @@ def load_metrics(
                     f"{', '.join(d.strftime('%Y-%m-%d') for d in failed)}"
                 )
 
-    zip_files = list_zip_files_between(symbol=symbol, start_date=start_date, end_date=end_date)
+    zip_files = list_binance_metrics_zip_files_between(symbol=symbol, start_date=start_date, end_date=end_date)
 
     if not zip_files:
         return pd.DataFrame(columns=ZIP_COLUMNS)
@@ -37,7 +37,7 @@ def load_metrics(
     frames = []
 
     for zip_path in zip_files:
-        frames.append(_load_zip_dataframe(zip_path))
+        frames.append(_load_binance_metrics_zip_dataframe(zip_path))
 
     df = pd.concat(frames, ignore_index=True)
     df = df.sort_values(CREATE_TIME, ignore_index=True)
@@ -63,7 +63,7 @@ def load_metrics(
     return df
 
 
-def _load_zip_dataframe(zip_path: Path) -> pd.DataFrame:
+def _load_binance_metrics_zip_dataframe(zip_path: Path) -> pd.DataFrame:
     with ZipFile(zip_path) as archive:
         csv_name = archive.namelist()[0]
 

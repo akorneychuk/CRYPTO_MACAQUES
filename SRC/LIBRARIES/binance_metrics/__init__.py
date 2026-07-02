@@ -1,7 +1,7 @@
-from .metrics import load_metrics
+from .metrics import load_binance_metrics
 from .alignment import attach_binance_metrics_for_15m
 
 __all__ = [
-    "load_metrics",
+    "load_binance_metrics",
     "attach_binance_metrics_for_15m"
 ]
