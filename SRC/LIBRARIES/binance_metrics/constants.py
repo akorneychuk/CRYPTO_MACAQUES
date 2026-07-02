@@ -11,6 +11,7 @@ DATA_DIR = Path(__file__).resolve().parents[3] / "DATA" / "binance" / "metrics"
 # =============================================================================
 
 BASE_URL = "https://data.binance.vision/data/futures/um/daily/metrics"
+BINANCE_ZIP_TF_MINUTES = 5
 
 # =============================================================================
 # CSV COLUMNS

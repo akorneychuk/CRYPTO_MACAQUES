@@ -1,10 +1,23 @@
+import re
 import pandas as pd
-from .constants import CREATE_TIME
+from .constants import CREATE_TIME, BINANCE_ZIP_TF_MINUTES
 
 
-def attach_binance_metrics_for_15m(df_counter: pd.DataFrame, metrics_df: pd.DataFrame) -> pd.DataFrame:
+def attach_binance_metrics(tf: str, df_counter: pd.DataFrame, metrics_df: pd.DataFrame) -> pd.DataFrame:
+    tf_number = int(re.search(r"\d+", tf).group())
+    tf_symbol = re.sub(r"\d+", "", tf)
+
+    if tf_symbol == 'M' and tf_number >= BINANCE_ZIP_TF_MINUTES and tf_number % BINANCE_ZIP_TF_MINUTES == 0:
+        num_intervals = tf_number // BINANCE_ZIP_TF_MINUTES
+    else:
+        raise RuntimeError(f'Can`t use Binance metrics with {tf} TF')
+
     df_counter = df_counter.copy()
     metrics_df = metrics_df.copy()
+
+    if metrics_df[CREATE_TIME].duplicated().any():
+        raise RuntimeError(f"Duplicate Binance metrics timestamps")
+
     metrics_df = metrics_df.set_index(CREATE_TIME, drop=False)
 
     metric_columns = [
@@ -13,24 +26,12 @@ def attach_binance_metrics_for_15m(df_counter: pd.DataFrame, metrics_df: pd.Data
         if column not in (CREATE_TIME, "symbol")
     ]
 
-    for column in metric_columns:
-        df_counter[f"{column}_m5"] = pd.NA
-        df_counter[f"{column}_m10"] = pd.NA
-        df_counter[f"{column}_m15"] = pd.NA
-
     for candle_time in df_counter.index:
-        metrics = metrics_df.loc[
-            (metrics_df.index > candle_time)
-            &
-            (metrics_df.index <= candle_time + pd.Timedelta(minutes=15))
-        ]
-
-        if len(metrics) != 3:
-            raise RuntimeError(f"{candle_time}: expected 3 metrics rows, found {len(metrics)}")
-
         for column in metric_columns:
-            df_counter.at[candle_time, f"{column}_m5"] = metrics.iloc[0][column]
-            df_counter.at[candle_time, f"{column}_m10"] = metrics.iloc[1][column]
-            df_counter.at[candle_time, f"{column}_m15"] = metrics.iloc[2][column]
+            for i in range(num_intervals):
+                column_number = (i + 1) * BINANCE_ZIP_TF_MINUTES
+                column_name = f"{column}_m{column_number}"
+                target_time = candle_time + pd.Timedelta(minutes=column_number)
+                df_counter.at[candle_time, column_name] = metrics_df[column].get(target_time, pd.NA)
 
     return df_counter
