@@ -64,6 +64,17 @@ def load_binance_metrics(
 
 
 def _load_binance_metrics_zip_dataframe(zip_path: Path) -> pd.DataFrame:
+    """
+    Normalizes historical Binance metrics archives to a single timestamp format.
+
+    Old archives:
+        00:00 ... 23:55
+
+    New archives:
+        00:05 ... 00:00(next day)
+
+    After normalization every archive follows the new format.
+    """
     with ZipFile(zip_path) as archive:
         csv_name = archive.namelist()[0]
 
@@ -71,5 +82,32 @@ def _load_binance_metrics_zip_dataframe(zip_path: Path) -> pd.DataFrame:
             df = pd.read_csv(file)
 
     df[CREATE_TIME] = pd.to_datetime(df[CREATE_TIME], utc=True).dt.floor("min")
+    df = _normalize_binance_metrics_archive_format(df)
+
+    first_time = df.iloc[0][CREATE_TIME].strftime("%H:%M:%S")
+    last_time = df.iloc[-1][CREATE_TIME].strftime("%H:%M:%S")
+
+    if first_time != "00:05:00":
+        raise RuntimeError(f"Unexpected first timestamp after normalization: {first_time}: {zip_path}")
+
+    if last_time != "00:00:00":
+        raise RuntimeError(f"Unexpected last timestamp after normalization: {last_time}: {zip_path}")
+
+    return df
+
+
+def _normalize_binance_metrics_archive_format(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    first_time = df.iloc[0][CREATE_TIME].strftime("%H:%M:%S")
+
+    if first_time == "00:00:00":
+        df[CREATE_TIME] += pd.Timedelta(minutes=5)
+    elif first_time == "00:05:00":
+        pass
+    else:
+        raise RuntimeError(
+            f"Unknown Binance metrics archive format. "
+            f"First timestamp: {df.iloc[0][CREATE_TIME]}"
+        )
 
     return df
