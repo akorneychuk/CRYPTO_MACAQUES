@@ -18,7 +18,7 @@ def find_binance_metrics_missing_dates(
     missing = []
     current = start_date
 
-    while current <= end_date:
+    while current.date() <= end_date.date():
         if not get_binance_metrics_zip_path(symbol, current).exists():
             missing.append(current)
 
@@ -35,7 +35,7 @@ def list_binance_metrics_zip_files_between(
     files = []
     current = start_date
 
-    while current <= end_date:
+    while current.date() <= end_date.date():
         path = get_binance_metrics_zip_path(symbol, current)
 
         if path.exists():
