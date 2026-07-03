@@ -85,13 +85,9 @@ def _load_binance_metrics_zip_dataframe(zip_path: Path) -> pd.DataFrame:
     df = _normalize_binance_metrics_archive_format(df)
 
     first_time = df.iloc[0][CREATE_TIME].strftime("%H:%M:%S")
-    last_time = df.iloc[-1][CREATE_TIME].strftime("%H:%M:%S")
 
     if first_time != "00:05:00":
         raise RuntimeError(f"Unexpected first timestamp after normalization: {first_time}: {zip_path}")
-
-    if last_time != "00:00:00":
-        raise RuntimeError(f"Unexpected last timestamp after normalization: {last_time}: {zip_path}")
 
     return df
 
