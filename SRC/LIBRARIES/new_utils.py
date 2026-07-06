@@ -52,6 +52,7 @@ from SRC.CORE.utils import datetime_h_m_s__d_m_Y, write_json, datetime_h_m_s, da
 from SRC.CORE.utils import read_json_safe
 from SRC.LIBRARIES.concurrent_utils import iterate_multiprocess_pool, iterate_multiprocess_executor, iterate_multithread_executor
 from SRC.LIBRARIES.time_utils import TIME_DELTA, kiev_now, kiev_now_formatted
+import re
 
 
 try:
@@ -60,12 +61,20 @@ except:
     from zoneinfo import ZoneInfo
 
 
+def get_tf_number(tf: str):
+    return int(re.search(r"\d+", tf).group())
+
+
+def get_tf_symbol(tf: str):
+    return re.sub(r"\d+", "", tf)
+
 
 def set_without_reordering(input_list):
     ordered_dict = OrderedDict.fromkeys(input_list)
     result_set = list(ordered_dict.keys())
 
     return result_set
+
 
 def mrc_supersmoother(src, length):
     """
@@ -84,6 +93,7 @@ def mrc_supersmoother(src, length):
         ss[i] = c1 * src[i] + c2 * ss[i-1] + c3 * ss[i-2]
 
     return ss
+
 
 def mrc_sak_filter(filter_type, src, length):
     """
@@ -155,6 +165,7 @@ def mrc_sak_filter(filter_type, src, length):
 
     return output
 
+
 def add_mrc_indicators(df, source_type='hlc3', filter_type='SuperSmoother',
                        length=200, innermult=1.0, outermult=2.415):
     """
@@ -218,6 +229,7 @@ def add_mrc_indicators(df, source_type='hlc3', filter_type='SuperSmoother',
 
     return df
 
+
 def mrc_calculate(mrc_df, df, source_type='hlc3', filter_type='SuperSmoother', innermult=1.0, outermult=2.415):
     mrc_df = add_mrc_indicators(mrc_df, source_type, filter_type, 200, innermult, outermult)
     # Переносим только нужную часть в df
@@ -226,16 +238,19 @@ def mrc_calculate(mrc_df, df, source_type='hlc3', filter_type='SuperSmoother', i
 
     return mrc_df
 
+
 # Функция для подготовки данных с буфером
 def prepare_buffer_data(df_main, df_display, buffer_size):
     combined = pd.concat([df_main.iloc[-(buffer_size + len(df_display)):], df_display])
     combined = combined[~combined.index.duplicated(keep='last')].sort_index()
     return combined
 
+
 def rsi(df, rsi_calc_df):
     df['rsi'] = ta.momentum.RSIIndicator(close=rsi_calc_df['close'], window=14).rsi().loc[df.index]
 
     return df
+
 
 def stochastic_tradingview(df, stoch_calc_df, periodK=14, smoothK=3, periodD=3):
     lowest_low = stoch_calc_df['low'].rolling(window=periodK).min()
@@ -247,6 +262,7 @@ def stochastic_tradingview(df, stoch_calc_df, periodK=14, smoothK=3, periodD=3):
     df['stoch_d'] = stoch_d.loc[df.index]
 
     return df
+
 
 def macd(df, macd_calc_df):
     macd = ta.trend.MACD(
@@ -261,6 +277,7 @@ def macd(df, macd_calc_df):
 
     return df, macd
 
+
 def atr(df, atr_calc_df):
     atr_full = ta.volatility.AverageTrueRange(
         high=atr_calc_df['high'],
@@ -271,6 +288,7 @@ def atr(df, atr_calc_df):
     df['atr'] = atr_full.loc[df.index]
 
     return df
+
 
 def plot_evaluated_model(train_config, plot_data_queue, initial_validation_data, train_validation_data, final_validation_data, train_loss_s, test_loss_s, train_validation_s, test_validation_s, epochs_count, epoch_exec_time_s, current_exec_time_seconds, started_at, is_finished=False):
     last_updated_at = kiev_now()
