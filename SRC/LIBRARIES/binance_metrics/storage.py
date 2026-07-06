@@ -4,7 +4,7 @@ from .constants import DATA_DIR
 
 
 def get_binance_metrics_zip_path(symbol: str, date: datetime) -> Path:
-    directory = DATA_DIR / symbol.upper()
+    directory = DATA_DIR / "archives" / symbol.upper()
     directory.mkdir(parents=True, exist_ok=True)
 
     return directory / f"{date:%Y-%m-%d}.zip"
