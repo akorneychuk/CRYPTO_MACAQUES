@@ -30,7 +30,7 @@ def attach_binance_metrics(tf: str, df_counter: pd.DataFrame, metrics_df: pd.Dat
     for column in metric_columns:
         series = metrics_df[column]
 
-        for i in range(num_intervals + 1):
+        for i in range(num_intervals):
             offset_minutes = i * BINANCE_ZIP_TF_MINUTES
             df_counter[f"{column}_m{offset_minutes}"] = series.reindex(df_counter.index + pd.Timedelta(minutes=offset_minutes)).to_numpy()
 
