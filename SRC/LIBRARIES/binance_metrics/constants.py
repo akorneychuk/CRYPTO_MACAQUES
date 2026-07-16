@@ -4,7 +4,7 @@ from pathlib import Path
 # PROJECT
 # =============================================================================
 
-DATA_DIR = Path(__file__).resolve().parents[3] / "DATA" / "binance" / "metrics"
+DATA_DIR = Path(__file__).resolve().parents[3] / "DATA" / "binance" / "metrics_futures"
 
 # =============================================================================
 # BINANCE
