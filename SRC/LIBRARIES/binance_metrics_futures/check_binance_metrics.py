@@ -1,19 +1,19 @@
 from datetime import datetime
-from SRC.LIBRARIES.binance_metrics import load_binance_metrics
-from SRC.LIBRARIES.binance_metrics.constants import *
+from SRC.LIBRARIES.binance_metrics_futures import load_binance_metrics_futures
+from SRC.LIBRARIES.binance_metrics_futures.constants import *
+
+
+def print_header(title: str):
+    print()
+    print("=" * 80)
+    print(title)
+    print("=" * 80)
+
 
 def main():
     SYMBOL = "ETHUSDT"
     START_DATE = datetime(2026, 6, 26)
     END_DATE = datetime(2026, 6, 29)
-
-
-    def print_header(title: str):
-        print()
-        print("=" * 80)
-        print(title)
-        print("=" * 80)
-
 
     # =============================================================================
     # TEST 1
@@ -21,7 +21,7 @@ def main():
 
     print_header("TEST 1 - LOAD ALL COLUMNS")
 
-    df = load_binance_metrics(symbol=SYMBOL, start_date=START_DATE, end_date=END_DATE)
+    df = load_binance_metrics_futures(symbol=SYMBOL, start_date=START_DATE, end_date=END_DATE)
 
     print(df.head())
     print()
@@ -41,7 +41,7 @@ def main():
 
     print_header("TEST 2 - LOAD SELECTED COLUMNS")
 
-    df = load_binance_metrics(
+    df = load_binance_metrics_futures(
         symbol=SYMBOL,
         start_date=START_DATE,
         end_date=END_DATE,

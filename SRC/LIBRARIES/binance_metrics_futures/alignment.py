@@ -1,8 +1,6 @@
 import pandas as pd
 from .constants import BINANCE_ZIP_TF_MINUTES, CREATE_TIME, SYMBOL
 import SRC.LIBRARIES.new_utils as nu
-
-
 def attach_binance_metrics(tf: str, df_counter: pd.DataFrame, metrics_df: pd.DataFrame) -> pd.DataFrame:
     tf_number = nu.get_tf_number(tf)
     tf_symbol = nu.get_tf_symbol(tf)
@@ -29,7 +27,6 @@ def attach_binance_metrics(tf: str, df_counter: pd.DataFrame, metrics_df: pd.Dat
 
     for column in metric_columns:
         series = metrics_df[column]
-
         for i in range(num_intervals):
             offset_minutes = i * BINANCE_ZIP_TF_MINUTES
             df_counter[f"{column}_m{offset_minutes}"] = series.reindex(df_counter.index + pd.Timedelta(minutes=offset_minutes)).to_numpy()

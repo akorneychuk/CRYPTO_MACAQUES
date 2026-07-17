@@ -2,34 +2,27 @@ from datetime import datetime
 from pathlib import Path
 from zipfile import ZipFile
 import pandas as pd
-from .constants import (CREATE_TIME, ZIP_COLUMNS)
-from .downloader import download_binance_metrics
-from .storage import (find_binance_metrics_missing_dates, list_binance_metrics_zip_files_between)
+from .constants import DATA_DIR, BASE_URL, CREATE_TIME, ZIP_COLUMNS
+from SRC.LIBRARIES.binance_downloader import get_binance_zip_files
 
 
-def load_binance_metrics(
+def load_binance_metrics_futures(
     symbol: str,
     start_date: datetime,
     end_date: datetime,
-    columns: list[str] | None = None,
-    auto_download: bool = True,
+    columns: list[str] | None = None
 ) -> pd.DataFrame:
     if start_date > end_date:
         raise ValueError("start_date must be <= end_date")
 
-    if auto_download:
-        missing_dates = find_binance_metrics_missing_dates(symbol=symbol, start_date=start_date, end_date=end_date)
-
-        if missing_dates:
-            failed = download_binance_metrics(symbol=symbol, dates=missing_dates)
-
-            if failed:
-                raise RuntimeError(
-                    f"Failed to download {len(failed)} archive(s): "
-                    f"{', '.join(d.strftime('%Y-%m-%d') for d in failed)}"
-                )
-
-    zip_files = list_binance_metrics_zip_files_between(symbol=symbol, start_date=start_date, end_date=end_date)
+    zip_files = get_binance_zip_files(
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+        data_dir=DATA_DIR,
+        base_url=BASE_URL,
+        url_suffix=_get_url_suffix(symbol)
+    )
 
     if not zip_files:
         return pd.DataFrame(columns=ZIP_COLUMNS)
@@ -63,6 +56,10 @@ def load_binance_metrics(
     return df
 
 
+def _get_url_suffix(symbol: str) -> str:
+    return f'{symbol.upper()}-metrics'
+
+
 def _load_binance_metrics_zip_dataframe(zip_path: Path) -> pd.DataFrame:
     """
     Normalizes historical Binance metrics archives to a single timestamp format.
@@ -76,9 +73,7 @@ def _load_binance_metrics_zip_dataframe(zip_path: Path) -> pd.DataFrame:
     After normalization every archive follows the new format.
     """
     with ZipFile(zip_path) as archive:
-        csv_name = archive.namelist()[0]
-
-        with archive.open(csv_name) as file:
+        with archive.open(archive.namelist()[0]) as file:
             df = pd.read_csv(file)
 
     df[CREATE_TIME] = pd.to_datetime(df[CREATE_TIME], utc=True).dt.floor("min")
