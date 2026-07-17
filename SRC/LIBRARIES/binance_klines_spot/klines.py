@@ -8,13 +8,14 @@ from .constants import *
 def load_binance_klines_spot_for_trade(
     symbol: str,
     trade_entry_time: datetime,
-    window_minutes: int
+    history_minutes: int
 ) -> pd.DataFrame:
-    window_start_time = trade_entry_time - timedelta(minutes=window_minutes)
+    window_start_time = trade_entry_time - timedelta(minutes=history_minutes)
+    window_end_time = trade_entry_time - timedelta(minutes=1)
     zip_files = get_binance_zip_files(
         symbol=symbol,
         start_date=window_start_time,
-        end_date=trade_entry_time,
+        end_date=window_end_time,
         data_dir=DATA_DIR,
         base_url=BASE_URL,
         url_suffix=_get_url_suffix(symbol)
@@ -36,8 +37,8 @@ def load_binance_klines_spot_for_trade(
     if not df.index.is_unique:
         raise RuntimeError("Combined dataframe contains duplicate timestamps")
 
-    df_window = df.loc[window_start_time:trade_entry_time]
-    expected_index = pd.date_range(start=window_start_time, end=trade_entry_time, freq="1min")
+    df_window = df.loc[window_start_time:window_end_time]
+    expected_index = pd.date_range(start=window_start_time, end=window_end_time, freq="1min")
 
     if len(df_window) != len(expected_index):
         raise RuntimeError(f"Window length mismatch: got {len(df_window)}, expected {len(expected_index)}")

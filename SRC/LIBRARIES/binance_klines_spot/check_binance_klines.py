@@ -30,7 +30,7 @@ def main():
     df = load_binance_klines_spot_for_trade(
         symbol=SYMBOL,
         trade_entry_time=TRADE_ENTRY_TIME,
-        window_minutes=WINDOW_MINUTES,
+        history_minutes=WINDOW_MINUTES,
     )
 
     print(df.head())
@@ -118,7 +118,10 @@ def main():
     print("Trade entry:", TRADE_ENTRY_TIME)
     print()
 
-    print("Last index == trade entry:", df.index[-1] == TRADE_ENTRY_TIME)
+    expected_last = TRADE_ENTRY_TIME - pd.Timedelta(minutes=1)
+    print("Expected last candle:", expected_last)
+    print("Actual last candle:", df.index[-1])
+    print("Last candle correct:", df.index[-1] == expected_last)
     print("Timedelta:", df.index[-1] - df.index[0])
     print()
 
