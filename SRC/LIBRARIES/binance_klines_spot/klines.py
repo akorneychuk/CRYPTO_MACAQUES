@@ -41,10 +41,10 @@ def load_binance_klines_spot_for_trade(
     expected_index = pd.date_range(start=window_start_time, end=window_end_time, freq="1min")
 
     if len(df_window) != len(expected_index):
-        raise RuntimeError(f"Window length mismatch: got {len(df_window)}, expected {len(expected_index)}")
+        raise RuntimeError(f"Window length mismatch: got {len(df_window)}, expected {len(expected_index)}, trade_entry_time: {trade_entry_time}")
 
     if not df_window.index.equals(expected_index):
-        raise RuntimeError("Window index does not match expected index")
+        raise RuntimeError(f"Window index does not match expected index, trade_entry_time: {trade_entry_time}")
 
     return df_window
 
