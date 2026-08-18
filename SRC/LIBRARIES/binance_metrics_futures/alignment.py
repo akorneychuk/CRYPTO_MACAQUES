@@ -1,9 +1,12 @@
 import pandas as pd
 from .constants import BINANCE_ZIP_TF_MINUTES, CREATE_TIME, SYMBOL
 import SRC.LIBRARIES.new_utils as nu
+
+# TODO When adapting this method for other TFs, look at the def find_entry_datetime, get_can_enter_by_signed_oi_slope_filter
 def attach_binance_metrics(tf: str, df_counter: pd.DataFrame, metrics_df: pd.DataFrame) -> pd.DataFrame:
     tf_number = nu.get_tf_number(tf)
     tf_symbol = nu.get_tf_symbol(tf)
+    # TODO Adapt for other TFs
     minutes_per_candle = tf_number
 
     if tf_symbol != "M" or minutes_per_candle < BINANCE_ZIP_TF_MINUTES or minutes_per_candle % BINANCE_ZIP_TF_MINUTES != 0:
@@ -27,6 +30,7 @@ def attach_binance_metrics(tf: str, df_counter: pd.DataFrame, metrics_df: pd.Dat
 
     for column in metric_columns:
         series = metrics_df[column]
+        # TODO НЕ ПРИВЯЗЫВАТЬСЯ К ТФ!!!!
         for i in range(num_intervals):
             offset_minutes = i * BINANCE_ZIP_TF_MINUTES
             df_counter[f"{column}_m{offset_minutes}"] = series.reindex(df_counter.index + pd.Timedelta(minutes=offset_minutes)).to_numpy()
